@@ -36,7 +36,7 @@ class SignalConfig:
     # Allowlist of recipients (user phone numbers and/or group ids) the server
     # is permitted to message. When empty, enforcement is disabled and every
     # recipient is allowed (opt-in security).
-    trusted_recipients: frozenset = field(default_factory=frozenset)
+    trusted_recipients: frozenset[str] = field(default_factory=frozenset)
 
 
 @dataclass
@@ -520,7 +520,7 @@ def initialize_server() -> SignalConfig:
     return config
 
 
-def _load_trusted_recipients(cli_recipients: list[str]) -> frozenset:
+def _load_trusted_recipients(cli_recipients: list[str]) -> frozenset[str]:
     """Build the trusted-recipient allowlist from CLI flags and the environment.
 
     Combines ``--trusted-recipient`` flags with the comma-separated
