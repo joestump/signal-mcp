@@ -9,10 +9,11 @@ from mcp.server.fastmcp import FastMCP
 from typing import Optional, Tuple, Dict, Union, Any
 import asyncio
 import json
+import os
 import subprocess
 import shlex
 import argparse
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import logging
 
 # Set up logging with more detailed format
@@ -32,6 +33,10 @@ class SignalConfig:
 
     user_id: str = ""  # The user's Signal phone number
     transport: str = "sse"
+    # Allowlist of recipients (user phone numbers and/or group ids) the server
+    # is permitted to message. When empty, enforcement is disabled and every
+    # recipient is allowed (opt-in security).
+    trusted_recipients: frozenset[str] = field(default_factory=frozenset)
 
 
 @dataclass
@@ -75,11 +80,40 @@ class SignalCLIError(SignalError):
     pass
 
 
+class UntrustedRecipientError(SignalError):
+    """Raised when a send is attempted to a recipient not on the allowlist."""
+
+    pass
+
+
 SuccessResponse = Dict[str, str]
 ErrorResponse = Dict[str, str]
 
 # Global config instance
 config = SignalConfig()
+
+
+def _normalize_recipient(value: str) -> str:
+    """Normalize a recipient identifier for allowlist comparison."""
+    return value.strip()
+
+
+def _ensure_trusted(target: str) -> None:
+    """Reject sends to recipients that are not on the configured allowlist.
+
+    When no trusted recipients are configured the allowlist is disabled and
+    every recipient is permitted, so enforcement is opt-in. The check is done
+    at the MCP tool boundary so the LLM can only message recipients the server
+    operator has explicitly approved.
+    """
+    if not config.trusted_recipients:
+        return
+
+    if _normalize_recipient(target) not in config.trusted_recipients:
+        logger.warning(f"Blocked send to untrusted recipient: {target}")
+        raise UntrustedRecipientError(
+            f"Recipient {target} is not in the trusted recipients allowlist"
+        )
 
 
 async def _run_signal_cli(cmd: str) -> Tuple[str, str, int | None]:
@@ -282,12 +316,15 @@ async def send_message_to_user(
     logger.info(f"Tool called: send_message_to_user for user {user_id}")
 
     try:
+        _ensure_trusted(user_id)
         success = await _send_message(message, user_id, is_group=False)
         if success:
             logger.info(f"Successfully sent message to user {user_id}")
             return {"message": "Message sent successfully"}
         logger.error(f"Failed to send message to user {user_id}")
         return {"error": "Failed to send message"}
+    except UntrustedRecipientError as e:
+        return {"error": str(e)}
     except Exception as e:
         logger.error(f"Error in send_message_to_user: {str(e)}", exc_info=True)
         return {"error": str(e)}
@@ -301,6 +338,7 @@ async def send_message_to_group(
     logger.info(f"Tool called: send_message_to_group for group {group_id}")
 
     try:
+        _ensure_trusted(group_id)
         group_name = await _get_group_id(group_id)
         if not group_name:
             logger.error(f"Could not find group: {group_id}")
@@ -312,6 +350,8 @@ async def send_message_to_group(
             return {"message": "Message sent successfully"}
         logger.error(f"Failed to send message to group {group_id}")
         return {"error": "Failed to send message"}
+    except UntrustedRecipientError as e:
+        return {"error": str(e)}
     except Exception as e:
         logger.error(f"Error in send_message_to_group: {str(e)}", exc_info=True)
         return {"error": str(e)}
@@ -335,6 +375,7 @@ async def send_reaction_to_user(
     logger.info(f"Tool called: send_reaction_to_user for user {user_id}")
 
     try:
+        _ensure_trusted(user_id)
         success = await _send_reaction(
             emoji,
             user_id,
@@ -346,6 +387,8 @@ async def send_reaction_to_user(
         if success:
             return {"message": "Reaction sent successfully"}
         return {"error": "Failed to send reaction"}
+    except UntrustedRecipientError as e:
+        return {"error": str(e)}
     except Exception as e:
         logger.error(f"Error in send_reaction_to_user: {str(e)}", exc_info=True)
         return {"error": str(e)}
@@ -368,6 +411,7 @@ async def send_reaction_to_group(
     logger.info(f"Tool called: send_reaction_to_group for group {group_id}")
 
     try:
+        _ensure_trusted(group_id)
         success = await _send_reaction(
             emoji,
             group_id,
@@ -379,6 +423,8 @@ async def send_reaction_to_group(
         if success:
             return {"message": "Reaction sent successfully"}
         return {"error": "Failed to send reaction"}
+    except UntrustedRecipientError as e:
+        return {"error": str(e)}
     except Exception as e:
         logger.error(f"Error in send_reaction_to_group: {str(e)}", exc_info=True)
         return {"error": str(e)}
@@ -438,6 +484,19 @@ def initialize_server() -> SignalConfig:
         default="sse",
         help="Transport to use for communication with the client. (default: sse)",
     )
+    parser.add_argument(
+        "--trusted-recipient",
+        action="append",
+        default=[],
+        dest="trusted_recipients",
+        metavar="RECIPIENT",
+        help=(
+            "Phone number or group id the server is allowed to message. Repeat "
+            "the flag to allow several. Values from the SIGNAL_TRUSTED_RECIPIENTS "
+            "env var (comma-separated) are added too. If no trusted recipients "
+            "are configured, every recipient is permitted."
+        ),
+    )
 
     args = parser.parse_args()
     logger.info(f"Parsed arguments: user_id={args.user_id}, transport={args.transport}")
@@ -445,9 +504,35 @@ def initialize_server() -> SignalConfig:
     # Set global config
     config.user_id = args.user_id
     config.transport = args.transport
+    config.trusted_recipients = _load_trusted_recipients(args.trusted_recipients)
+
+    if config.trusted_recipients:
+        logger.info(
+            f"Trusted recipients enforced ({len(config.trusted_recipients)} entries); "
+            "sends to other recipients will be rejected"
+        )
+    else:
+        logger.warning(
+            "No trusted recipients configured; the server may message any recipient"
+        )
 
     logger.info(f"Initialized Signal server for user: {config.user_id}")
     return config
+
+
+def _load_trusted_recipients(cli_recipients: list[str]) -> frozenset[str]:
+    """Build the trusted-recipient allowlist from CLI flags and the environment.
+
+    Combines ``--trusted-recipient`` flags with the comma-separated
+    ``SIGNAL_TRUSTED_RECIPIENTS`` env var, normalizing and dropping blanks.
+    """
+    recipients = list(cli_recipients or [])
+    env_value = os.environ.get("SIGNAL_TRUSTED_RECIPIENTS", "")
+    recipients.extend(env_value.split(","))
+
+    return frozenset(
+        normalized for raw in recipients if (normalized := _normalize_recipient(raw))
+    )
 
 
 def run_mcp_server():
