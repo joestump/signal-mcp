@@ -52,7 +52,9 @@ Run the MCP server:
 
 - `send_message_to_user`: Send a direct message to a Signal user
 - `send_message_to_group`: Send a message to a Signal group
-- `receive_message`: Wait for and receive messages with timeout support
+- `send_reaction_to_user`: React to a user's message with an emoji (set `remove=True` to undo)
+- `send_reaction_to_group`: React to a message in a group with an emoji
+- `receive_message`: Wait for and receive messages with timeout support. Returns either a text `message` or a structured `reaction` (emoji + target), so emoji reactions — including "Note to Self" reactions — come through instead of erroring
 
 ## Development
 
