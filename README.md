@@ -1,11 +1,7 @@
 # Signal MCP
 
 > [!NOTE]
-> **This is a maintained fork** of [rymurr/signal-mcp](https://github.com/rymurr/signal-mcp).
-> At the time of forking, upstream had **0 open issues** and **0 open pull requests**
-> (1 PR ever, closed), and was **never published to npm or Docker Hub**. It is now
-> maintained by [Joe Stump](https://github.com/joestump) and Claude
-> ([Claude Code](https://claude.com/claude-code)).
+> A maintained fork of [rymurr/signal-mcp](https://github.com/rymurr/signal-mcp), whose last upstream commit was Apr 9, 2025 with none since — now maintained by [Joe Stump](https://github.com/joestump) and [Claude Code](https://claude.com/claude-code).
 
 An [MCP](https://modelcontextprotocol.io) server for [signal-cli](https://github.com/AsamK/signal-cli)
 that lets AI agents send and receive Signal messages — including emoji
