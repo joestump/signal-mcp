@@ -45,13 +45,13 @@ def test_ensure_trusted_normalizes_whitespace(monkeypatch):
 
 
 def test_load_trusted_recipients_merges_cli_and_env(monkeypatch):
-    monkeypatch.setenv("SIGNAL_TRUSTED_RECIPIENTS", f" {MALLORY} , , ")
+    monkeypatch.setenv("SIGNAL_MCP_TRUSTED_RECIPIENTS", f" {MALLORY} , , ")
     result = _load_trusted_recipients([ALICE, ""])
     assert result == frozenset({ALICE, MALLORY})
 
 
 def test_load_trusted_recipients_empty_without_config(monkeypatch):
-    monkeypatch.delenv("SIGNAL_TRUSTED_RECIPIENTS", raising=False)
+    monkeypatch.delenv("SIGNAL_MCP_TRUSTED_RECIPIENTS", raising=False)
     assert _load_trusted_recipients([]) == frozenset()
 
 

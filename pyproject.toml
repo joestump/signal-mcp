@@ -1,9 +1,11 @@
 [project]
 name = "signal-mcp"
 version = "0.1.0"
-description = "Add your description here"
+description = "MCP server for signal-cli — send and receive Signal messages and reactions via a signal-cli daemon."
 readme = "README.md"
 requires-python = ">=3.13"
+license = "MIT"
+license-files = ["LICENSE"]
 dependencies = [
     "mcp>=1.6.0",
 ]

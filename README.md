@@ -97,19 +97,22 @@ uv run server --user-id YOUR_PHONE_NUMBER [--transport sse|stdio] \
 
 ### Configuration
 
+Every flag has an environment-variable equivalent; the flag wins when both are
+set. All variables use the `SIGNAL_MCP_` prefix to avoid collisions.
+
 | Flag | Env var | Default | Description |
 | --- | --- | --- | --- |
-| `--user-id` *(required)* | — | — | Your Signal phone number (E.164). |
-| `--transport` | — | `sse` | MCP transport: `sse` or `stdio`. Use `stdio` for Claude Desktop/Code. |
-| `--rpc-host` | `SIGNAL_CLI_RPC_HOST` | `127.0.0.1` | Host of the signal-cli daemon JSON-RPC interface. |
-| `--rpc-port` | `SIGNAL_CLI_RPC_PORT` | `7583` | Port of the signal-cli daemon JSON-RPC interface. |
-| `--trusted-recipient` | `SIGNAL_TRUSTED_RECIPIENTS` | *(none)* | Allowlist of recipients the server may message. See below. |
+| `--user-id` *(required)* | `SIGNAL_MCP_USER_ID` | — | Your Signal phone number (E.164). |
+| `--transport` | `SIGNAL_MCP_TRANSPORT` | `sse` | MCP transport: `sse` or `stdio`. Use `stdio` for Claude Desktop/Code. |
+| `--rpc-host` | `SIGNAL_MCP_RPC_HOST` | `127.0.0.1` | Host of the signal-cli daemon JSON-RPC interface. |
+| `--rpc-port` | `SIGNAL_MCP_RPC_PORT` | `7583` | Port of the signal-cli daemon JSON-RPC interface. |
+| `--trusted-recipient` | `SIGNAL_MCP_TRUSTED_RECIPIENTS` | *(none)* | Allowlist of recipients the server may message (comma-separated in the env var). See below. |
 
 ### Restricting recipients (trusted recipients)
 
 By default the server can message any recipient. To enforce an allowlist so the
 agent can only message recipients you have approved, pass `--trusted-recipient`
-(repeatable) and/or set the comma-separated `SIGNAL_TRUSTED_RECIPIENTS`
+(repeatable) and/or set the comma-separated `SIGNAL_MCP_TRUSTED_RECIPIENTS`
 environment variable. Values may be user phone numbers (E.164) or group
 ids/names:
 
@@ -120,7 +123,7 @@ uv run server --user-id YOUR_PHONE_NUMBER \
     --trusted-recipient GROUP_ID
 
 # Equivalent via environment variable
-SIGNAL_TRUSTED_RECIPIENTS="+15555550101,GROUP_ID" \
+SIGNAL_MCP_TRUSTED_RECIPIENTS="+15555550101,GROUP_ID" \
     uv run server --user-id YOUR_PHONE_NUMBER
 ```
 
@@ -164,7 +167,7 @@ Add a `signal` entry under `mcpServers`:
         "--transport", "stdio"
       ],
       "env": {
-        "SIGNAL_TRUSTED_RECIPIENTS": "+15555550101"
+        "SIGNAL_MCP_TRUSTED_RECIPIENTS": "+15555550101"
       }
     }
   }
@@ -173,7 +176,7 @@ Add a `signal` entry under `mcpServers`:
 
 Restart Claude Desktop for the change to take effect. The `env` block is
 optional — use it to enforce the allowlist or point at a non-default daemon
-(`SIGNAL_CLI_RPC_HOST` / `SIGNAL_CLI_RPC_PORT`). You can also pass
+(`SIGNAL_MCP_RPC_HOST` / `SIGNAL_MCP_RPC_PORT`). You can also pass
 `--trusted-recipient` directly in `args`.
 
 ### Claude Code
@@ -183,14 +186,14 @@ launch command):
 
 ```bash
 claude mcp add signal \
-  --env SIGNAL_TRUSTED_RECIPIENTS=+15555550101 \
+  --env SIGNAL_MCP_TRUSTED_RECIPIENTS=+15555550101 \
   -- uv run --directory /ABSOLUTE/PATH/TO/signal-mcp \
      server --user-id +15551234567 --transport stdio
 ```
 
 Use `--scope user` to make it available across all your projects (the default
 is the current project). `--env KEY=value` (before the `--`) passes environment
-variables such as `SIGNAL_TRUSTED_RECIPIENTS` or the `SIGNAL_CLI_RPC_*`
+variables such as `SIGNAL_MCP_TRUSTED_RECIPIENTS` or the `SIGNAL_MCP_RPC_*`
 settings. This writes an `mcpServers` entry to your Claude Code config; you can
 also hand-edit `.mcp.json` (project scope) with the same JSON shape shown above.
 Verify with `claude mcp list`.
@@ -285,3 +288,7 @@ uv run --extra test pytest   # tests
 
 Tests use a `FakeClient` stand-in for the daemon and JSON fixtures for the
 parser, so no live `signal-cli` daemon is required.
+
+## License
+
+Released under the [MIT License](LICENSE).
