@@ -1,12 +1,11 @@
 import asyncio
-import json
 import os
 
 from signal_mcp import main
 from signal_mcp.main import (
     MessageResponse,
     Reaction,
-    _parse_receive_output,
+    _envelope_to_response,
     _send_reaction,
 )
 
@@ -23,13 +22,28 @@ THUMBS_UP = "\U0001f44d"
 THUMBS_DOWN = "\U0001f44e"
 
 
-def _envelope(account: str, **envelope) -> str:
-    """signal-cli --output=json emits one JSON object per line."""
-    return json.dumps({"envelope": envelope, "account": account})
+def _envelope(account: str, **envelope) -> dict:
+    """The ``params`` of a signal-cli daemon ``receive`` notification — a single
+    ``{"envelope": {...}, "account": ...}`` object."""
+    return {"envelope": envelope, "account": account}
 
 
-def _parse(output: str) -> MessageResponse | None:
-    return asyncio.run(_parse_receive_output(output))
+def _parse(payload: dict) -> MessageResponse | None:
+    return _envelope_to_response(payload)
+
+
+class FakeClient:
+    """Stand-in for SignalRpcClient that records JSON-RPC calls."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, dict | None]] = []
+        self.list_groups_result: list[dict] = []
+
+    async def call(self, method, params=None, timeout=30.0):
+        self.calls.append((method, params))
+        if method == "listGroups":
+            return self.list_groups_result
+        return {"timestamp": 1}
 
 
 # A direct text message from another user.
@@ -175,62 +189,64 @@ def test_parse_sync_reaction_remove():
 
 def test_receipts_are_ignored():
     assert _parse(RECEIPT) is None
-    assert _parse("") is None
+    assert _parse({}) is None
 
 
-def test_first_meaningful_envelope_wins():
-    """Receipts before a message should be skipped, message returned."""
-    combined = "\n".join([RECEIPT, DIRECT_MESSAGE])
-    result = _parse(combined)
-    assert result is not None
-    assert result.message == "yo"
+def test_send_message_builds_params(monkeypatch):
+    """_send_message issues a `send` call with recipient + message params."""
+    fake = FakeClient()
+    monkeypatch.setattr(main, "client", fake)
 
-
-def test_send_reaction_builds_command(monkeypatch):
-    """_send_reaction shells out to `signal-cli sendReaction` with the right flags."""
-    captured = {}
-
-    async def fake_run(cmd: str):
-        captured["cmd"] = cmd
-        return ("", "", 0)
-
-    monkeypatch.setattr(main, "_run_signal_cli", fake_run)
-    monkeypatch.setattr(main.config, "user_id", SELF)
-
-    ok = asyncio.run(
-        _send_reaction(
-            "\U0001f44d",
-            SELF,
-            SELF,
-            1782554453770,
-        )
-    )
+    ok = asyncio.run(main._send_message("yo", OTHER))
     assert ok is True
-    cmd = captured["cmd"]
-    assert "sendReaction" in cmd
-    assert "-e " in cmd
-    assert f"-a {SELF}" in cmd
-    assert "-t 1782554453770" in cmd
-    assert "-r" not in cmd  # not a removal
+    method, params = fake.calls[-1]
+    assert method == "send"
+    assert params == {"message": "yo", "recipient": [OTHER]}
+
+
+def test_send_message_to_group_uses_group_id(monkeypatch):
+    """Group sends resolve a name to its id, then use the `groupId` param."""
+    fake = FakeClient()
+    fake.list_groups_result = [{"id": "GID==", "name": "#talk-homelab"}]
+    monkeypatch.setattr(main, "client", fake)
+
+    ok = asyncio.run(main._send_message("yo", "GID==", is_group=True))
+    assert ok is True
+    method, params = fake.calls[-1]
+    assert method == "send"
+    assert params == {"message": "yo", "groupId": "GID=="}
+
+
+def test_resolve_group_id_by_name_or_id(monkeypatch):
+    fake = FakeClient()
+    fake.list_groups_result = [{"id": "GID==", "name": "#talk-homelab"}]
+    monkeypatch.setattr(main, "client", fake)
+
+    assert asyncio.run(main._resolve_group_id("#talk-homelab")) == "GID=="
+    assert asyncio.run(main._resolve_group_id("GID==")) == "GID=="
+    assert asyncio.run(main._resolve_group_id("nope")) is None
+
+
+def test_send_reaction_builds_params(monkeypatch):
+    """_send_reaction issues a `sendReaction` call with the right params."""
+    fake = FakeClient()
+    monkeypatch.setattr(main, "client", fake)
+
+    ok = asyncio.run(_send_reaction(THUMBS_UP, SELF, SELF, 1782554453770))
+    assert ok is True
+    method, params = fake.calls[-1]
+    assert method == "sendReaction"
+    assert params["emoji"] == THUMBS_UP
+    assert params["recipient"] == [SELF]
+    assert params["targetAuthor"] == SELF
+    assert params["targetTimestamp"] == 1782554453770
+    assert params["remove"] is False
 
 
 def test_send_reaction_remove_passes_flag(monkeypatch):
-    captured = {}
+    fake = FakeClient()
+    monkeypatch.setattr(main, "client", fake)
 
-    async def fake_run(cmd: str):
-        captured["cmd"] = cmd
-        return ("", "", 0)
-
-    monkeypatch.setattr(main, "_run_signal_cli", fake_run)
-    monkeypatch.setattr(main.config, "user_id", SELF)
-
-    asyncio.run(
-        _send_reaction(
-            "\U0001f44d",
-            SELF,
-            SELF,
-            1782554453770,
-            remove=True,
-        )
-    )
-    assert "-r" in captured["cmd"]
+    asyncio.run(_send_reaction(THUMBS_UP, SELF, SELF, 1782554453770, remove=True))
+    _, params = fake.calls[-1]
+    assert params["remove"] is True
