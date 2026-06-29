@@ -5,13 +5,30 @@
 #     "mcp",
 # ]
 # ///
+"""Signal MCP server — JSON-RPC client for a long-running ``signal-cli daemon``.
+
+Instead of spawning a fresh ``signal-cli`` (and a fresh JVM) per request, this
+server talks to a persistent ``signal-cli -a <number> daemon --tcp HOST:PORT``
+over its newline-delimited JSON-RPC interface. That daemon holds the account
+lock for its lifetime, so:
+
+  * calls are instant (no ~2-3s JVM cold start each time), and
+  * concurrent callers (this MCP, scheduled tasks, manual use) no longer fight
+    over the signal-cli account lock — everything funnels through one daemon.
+
+The daemon is expected to run with ``--receive-mode on-start`` so it is always
+receiving. Incoming messages arrive as JSON-RPC *notifications* (``method":
+"receive"``); we drain the meaningful ones (text bodies / emoji reactions) into
+a queue that ``receive_message`` pops from. signal-cli here is a *linked*
+device, so the phone remains the durable source of truth — a brief daemon
+outage never loses data.
+"""
+
 from mcp.server.fastmcp import FastMCP
-from typing import Optional, Tuple, Dict, Union, Any
+from typing import Optional, Dict, Union, Any
 import asyncio
 import json
 import os
-import subprocess
-import shlex
 import argparse
 from dataclasses import dataclass, field
 import logging
@@ -29,13 +46,15 @@ logger.info("Initialized FastMCP server for signal-cli")
 
 @dataclass
 class SignalConfig:
-    """Configuration for Signal CLI."""
+    """Configuration for the Signal MCP server."""
 
-    user_id: str = ""  # The user's Signal phone number
+    user_id: str = ""  # The user's Signal phone number (informational/logging)
     transport: str = "sse"
-    # Allowlist of recipients (user phone numbers and/or group ids) the server
-    # is permitted to message. When empty, enforcement is disabled and every
-    # recipient is allowed (opt-in security).
+    rpc_host: str = "127.0.0.1"
+    rpc_port: int = 7583
+    # Allowlist of recipients (user phone numbers and/or group ids/names) the
+    # server is permitted to message. When empty, enforcement is disabled and
+    # every recipient is allowed (opt-in security).
     trusted_recipients: frozenset[str] = field(default_factory=frozenset)
 
 
@@ -75,7 +94,7 @@ class SignalError(Exception):
 
 
 class SignalCLIError(SignalError):
-    """Exception raised when signal-cli command fails."""
+    """Exception raised when a signal-cli JSON-RPC call fails."""
 
     pass
 
@@ -102,8 +121,9 @@ def _ensure_trusted(target: str) -> None:
     """Reject sends to recipients that are not on the configured allowlist.
 
     When no trusted recipients are configured the allowlist is disabled and
-    every recipient is permitted, so enforcement is opt-in. The check is done
-    at the MCP tool boundary so the LLM can only message recipients the server
+    every recipient is permitted, so enforcement is opt-in. The check runs at
+    the MCP tool boundary, before any JSON-RPC ``send``/``sendReaction`` is
+    issued to the daemon, so the LLM can only message recipients the server
     operator has explicitly approved.
     """
     if not config.trusted_recipients:
@@ -116,72 +136,248 @@ def _ensure_trusted(target: str) -> None:
         )
 
 
-async def _run_signal_cli(cmd: str) -> Tuple[str, str, int | None]:
-    """Helper method to run a signal-cli command."""
-    logger.debug(f"Executing signal-cli command: {cmd}")
-    try:
-        process = await asyncio.create_subprocess_shell(
-            cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE
-        )
+def _envelope_to_response(payload: Dict[str, Any]) -> Optional[MessageResponse]:
+    """Turn one signal-cli envelope into a ``MessageResponse``.
 
-        stdout, stderr = await process.communicate()
-        stdout_str, stderr_str = stdout.decode(), stderr.decode()
+    ``payload`` is a single ``{"envelope": {...}, "account": ...}`` object — the
+    ``params`` of a JSON-RPC ``receive`` notification (identical to one line of
+    ``signal-cli --output=json receive``). Returns ``None`` for envelopes that
+    carry nothing actionable (delivery/read receipts, typing indicators, empty
+    sync messages).
 
-        if process.returncode != 0:
-            logger.warning(
-                f"signal-cli command failed with return code {process.returncode}"
-            )
-            logger.warning(f"stderr: {stderr_str}")
-        else:
-            logger.debug("signal-cli command completed successfully")
+    JSON is required because signal-cli's plain-text output collapses a synced
+    reaction (e.g. reacting to a "Note to Self" message) down to a bare
+    ``Received a sync message`` line with no emoji or target, so reactions are
+    impossible to recover from the text format.
+    """
+    envelope = payload.get("envelope") or {}
+    sender = envelope.get("source") or envelope.get("sourceNumber")
 
-        return stdout_str, stderr_str, process.returncode
-
-    except Exception as e:
-        logger.error(f"Error running signal-cli command: {str(e)}", exc_info=True)
-        raise SignalCLIError(f"Failed to run signal-cli: {str(e)}")
-
-
-async def _get_group_id(group_name: str) -> Optional[str]:
-    """Get the group name for a given group name."""
-    logger.info(f"Looking up group with name: {group_name}")
-
-    list_cmd = f"signal-cli -u {shlex.quote(config.user_id)} listGroups"
-    stdout, stderr, return_code = await _run_signal_cli(list_cmd)
-
-    if return_code != 0:
-        logger.error(f"Error listing groups: {stderr}")
+    # A body/reaction lives on dataMessage (messages from others) or on
+    # syncMessage.sentMessage (anything you sent from another linked device,
+    # including reactions in "Note to Self").
+    data_message = envelope.get("dataMessage") or {}
+    sent_message = (envelope.get("syncMessage") or {}).get("sentMessage") or {}
+    content: Dict[str, Any] = data_message or sent_message
+    if not content:
         return None
 
-    # Parse the output to find the group name
-    for line in stdout.split("\n"):
-        if "Name: " in line and group_name in line:
-            logger.info(f"Found group: {group_name}")
-            return group_name
+    group_info = content.get("groupInfo") or {}
+    group = group_info.get("groupId")
+    timestamp = content.get("timestamp") or envelope.get("timestamp")
 
-    logger.error(f"Could not find group with name: {group_name}")
+    reaction = content.get("reaction")
+    if reaction:
+        emoji = reaction.get("emoji")
+        logger.info(
+            f"Parsed reaction {emoji!r} from {sender}"
+            + (f" in group {group}" if group else "")
+        )
+        return MessageResponse(
+            sender_id=sender,
+            group_name=group,
+            timestamp=timestamp,
+            reaction=Reaction(
+                emoji=emoji,
+                target_author=reaction.get("targetAuthor"),
+                target_timestamp=reaction.get("targetSentTimestamp"),
+                is_remove=reaction.get("isRemove", False),
+            ),
+        )
+
+    body = content.get("message")
+    if body:
+        logger.info(
+            f"Parsed message from {sender}" + (f" in group {group}" if group else "")
+        )
+        return MessageResponse(
+            message=body,
+            sender_id=sender,
+            group_name=group,
+            timestamp=timestamp,
+        )
+
+    return None
+
+
+class SignalRpcClient:
+    """A persistent JSON-RPC client for a ``signal-cli daemon`` (TCP).
+
+    One connection is opened lazily and kept alive. A background reader task
+    routes responses back to their callers by ``id`` and funnels ``receive``
+    notifications into a queue for :meth:`next_message`. If the connection drops
+    it is transparently re-established on the next call.
+    """
+
+    def __init__(self, host: str, port: int) -> None:
+        self.host = host
+        self.port = port
+        self._reader: Optional[asyncio.StreamReader] = None
+        self._writer: Optional[asyncio.StreamWriter] = None
+        self._reader_task: Optional[asyncio.Task] = None
+        self._pending: Dict[int, asyncio.Future] = {}
+        self._messages: asyncio.Queue = asyncio.Queue()
+        self._id = 0
+        self._connect_lock = asyncio.Lock()
+
+    @property
+    def _connected(self) -> bool:
+        return self._writer is not None and not self._writer.is_closing()
+
+    async def _ensure_connected(self) -> None:
+        if self._connected:
+            return
+        async with self._connect_lock:
+            if self._connected:
+                return
+            logger.info(f"Connecting to signal-cli daemon at {self.host}:{self.port}")
+            try:
+                self._reader, self._writer = await asyncio.open_connection(
+                    self.host, self.port
+                )
+            except OSError as e:
+                raise SignalCLIError(
+                    f"Cannot reach signal-cli daemon at {self.host}:{self.port} "
+                    f"({e}). Is the daemon running? "
+                    f"(macOS: `signal-daemon status`)"
+                )
+            self._reader_task = asyncio.create_task(self._read_loop())
+            logger.info("Connected to signal-cli daemon")
+
+    async def _read_loop(self) -> None:
+        assert self._reader is not None
+        try:
+            while True:
+                line = await self._reader.readline()
+                if not line:
+                    break  # EOF — daemon closed the connection
+                try:
+                    obj = json.loads(line)
+                except json.JSONDecodeError:
+                    logger.debug(f"Skipping non-JSON line: {line[:80]!r}")
+                    continue
+
+                if "method" in obj:
+                    # A notification. We only care about incoming messages.
+                    if obj.get("method") == "receive":
+                        parsed = _envelope_to_response(obj.get("params") or {})
+                        if parsed is not None:
+                            self._messages.put_nowait(parsed)
+                    continue
+
+                # Otherwise it's a response to one of our requests.
+                rid = obj.get("id")
+                fut = self._pending.pop(rid, None)
+                if fut is None or fut.done():
+                    continue
+                if obj.get("error") is not None:
+                    fut.set_exception(SignalCLIError(json.dumps(obj["error"])))
+                else:
+                    fut.set_result(obj.get("result"))
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:  # noqa: BLE001 — surface, then tear down cleanly
+            logger.warning(f"signal-cli daemon reader loop ended: {e}")
+        finally:
+            self._teardown(SignalCLIError("signal-cli daemon connection closed"))
+
+    def _teardown(self, exc: Exception) -> None:
+        for fut in self._pending.values():
+            if not fut.done():
+                fut.set_exception(exc)
+        self._pending.clear()
+        if self._writer is not None:
+            try:
+                self._writer.close()
+            except Exception:  # noqa: BLE001
+                pass
+        self._writer = None
+        self._reader = None
+
+    async def call(
+        self,
+        method: str,
+        params: Optional[Dict[str, Any]] = None,
+        timeout: float = 30.0,
+    ) -> Any:
+        """Issue a JSON-RPC request and await its result."""
+        await self._ensure_connected()
+        assert self._writer is not None
+
+        self._id += 1
+        rid = self._id
+        req: Dict[str, Any] = {"jsonrpc": "2.0", "method": method, "id": rid}
+        if params is not None:
+            req["params"] = params
+
+        fut: asyncio.Future = asyncio.get_running_loop().create_future()
+        self._pending[rid] = fut
+
+        logger.debug(f"JSON-RPC -> {method} (id={rid})")
+        self._writer.write((json.dumps(req) + "\n").encode())
+        await self._writer.drain()
+
+        try:
+            return await asyncio.wait_for(fut, timeout)
+        except asyncio.TimeoutError:
+            self._pending.pop(rid, None)
+            raise SignalCLIError(f"signal-cli daemon timed out on {method}")
+
+    async def next_message(self, timeout: float) -> Optional[MessageResponse]:
+        """Wait up to ``timeout`` seconds for the next actionable message."""
+        await self._ensure_connected()
+        try:
+            return await asyncio.wait_for(self._messages.get(), timeout)
+        except asyncio.TimeoutError:
+            return None
+
+
+# Global JSON-RPC client (initialized in initialize_server()).
+client: Optional[SignalRpcClient] = None
+
+
+def _client() -> SignalRpcClient:
+    global client
+    if client is None:
+        client = SignalRpcClient(config.rpc_host, config.rpc_port)
+    return client
+
+
+async def _resolve_group_id(name_or_id: str) -> Optional[str]:
+    """Resolve a group name *or* id to the group's internal id."""
+    logger.info(f"Resolving group: {name_or_id}")
+    try:
+        groups = await _client().call("listGroups")
+    except SignalCLIError as e:
+        logger.error(f"Error listing groups: {e}")
+        return None
+
+    for g in groups or []:
+        if g.get("id") == name_or_id or g.get("name") == name_or_id:
+            logger.info(f"Resolved group {name_or_id!r} -> {g.get('id')}")
+            return g.get("id")
+
+    logger.error(f"Could not find group: {name_or_id}")
     return None
 
 
 async def _send_message(message: str, target: str, is_group: bool = False) -> bool:
-    """Send a message to either a user or group."""
+    """Send a message to either a user or group via the daemon."""
     target_type = "group" if is_group else "user"
     logger.info(f"Sending message to {target_type}: {target}")
 
-    flag = "-g" if is_group else ""
-    cmd = f"signal-cli -u {shlex.quote(config.user_id)} send {flag} {shlex.quote(target)} -m {shlex.quote(message)}"
+    params: Dict[str, Any] = {"message": message}
+    if is_group:
+        params["groupId"] = target
+    else:
+        params["recipient"] = [target]
 
     try:
-        _, stderr, return_code = await _run_signal_cli(cmd)
-
-        if return_code == 0:
-            logger.info(f"Successfully sent message to {target_type}: {target}")
-            return True
-        else:
-            logger.error(f"Error sending message to {target_type}: {stderr}")
-            return False
+        await _client().call("send", params)
+        logger.info(f"Successfully sent message to {target_type}: {target}")
+        return True
     except SignalCLIError as e:
-        logger.error(f"Failed to send message to {target_type}: {str(e)}")
+        logger.error(f"Failed to send message to {target_type}: {e}")
         return False
 
 
@@ -193,7 +389,7 @@ async def _send_reaction(
     is_group: bool = False,
     remove: bool = False,
 ) -> bool:
-    """Send (or remove) an emoji reaction to a message.
+    """Send (or remove) an emoji reaction to a message via the daemon.
 
     ``target`` is the recipient (a user number or a group id). ``target_author``
     and ``target_timestamp`` identify the message being reacted to.
@@ -202,110 +398,24 @@ async def _send_reaction(
     action = "Removing" if remove else "Sending"
     logger.info(f"{action} reaction {emoji!r} to {target_type}: {target}")
 
-    recipient = "-g" if is_group else ""
-    remove_flag = "-r" if remove else ""
-    cmd = (
-        f"signal-cli -u {shlex.quote(config.user_id)} sendReaction "
-        f"{recipient} {shlex.quote(target)} "
-        f"-e {shlex.quote(emoji)} "
-        f"-a {shlex.quote(target_author)} "
-        f"-t {int(target_timestamp)} "
-        f"{remove_flag}"
-    )
+    params: Dict[str, Any] = {
+        "emoji": emoji,
+        "targetAuthor": target_author,
+        "targetTimestamp": int(target_timestamp),
+        "remove": remove,
+    }
+    if is_group:
+        params["groupId"] = target
+    else:
+        params["recipient"] = [target]
 
     try:
-        _, stderr, return_code = await _run_signal_cli(cmd)
-
-        if return_code == 0:
-            logger.info(f"Successfully sent reaction to {target_type}: {target}")
-            return True
-        else:
-            logger.error(f"Error sending reaction to {target_type}: {stderr}")
-            return False
+        await _client().call("sendReaction", params)
+        logger.info(f"Successfully sent reaction to {target_type}: {target}")
+        return True
     except SignalCLIError as e:
-        logger.error(f"Failed to send reaction to {target_type}: {str(e)}")
+        logger.error(f"Failed to send reaction to {target_type}: {e}")
         return False
-
-
-async def _parse_receive_output(
-    stdout: str,
-) -> Optional[MessageResponse]:
-    """Parse signal-cli ``--output=json`` receive output.
-
-    signal-cli emits one JSON envelope per line (JSON Lines). We return the
-    first envelope that carries something meaningful — a text body or an emoji
-    reaction — and skip the rest (delivery/read receipts, typing indicators and
-    empty sync messages).
-
-    JSON is required because signal-cli's plain-text output collapses a synced
-    reaction (e.g. reacting to a "Note to Self" message) down to a bare
-    ``Received a sync message`` line with no emoji or target, so reactions are
-    impossible to recover from the text format.
-    """
-    logger.debug("Parsing received message output")
-
-    for line in stdout.splitlines():
-        line = line.strip()
-        if not line:
-            continue
-
-        try:
-            payload = json.loads(line)
-        except json.JSONDecodeError:
-            # signal-cli writes logs to stderr, but guard against stray lines.
-            logger.debug(f"Skipping non-JSON line: {line[:80]!r}")
-            continue
-
-        envelope = payload.get("envelope") or {}
-        sender = envelope.get("source") or envelope.get("sourceNumber")
-
-        # A body/reaction lives on dataMessage (messages from others) or on
-        # syncMessage.sentMessage (anything you sent from another linked device,
-        # including reactions in "Note to Self").
-        data_message = envelope.get("dataMessage") or {}
-        sent_message = (envelope.get("syncMessage") or {}).get("sentMessage") or {}
-        content: Dict[str, Any] = data_message or sent_message
-        if not content:
-            continue
-
-        group_info = content.get("groupInfo") or {}
-        group = group_info.get("groupId")
-        timestamp = content.get("timestamp") or envelope.get("timestamp")
-
-        reaction = content.get("reaction")
-        if reaction:
-            emoji = reaction.get("emoji")
-            logger.info(
-                f"Parsed reaction {emoji!r} from {sender}"
-                + (f" in group {group}" if group else "")
-            )
-            return MessageResponse(
-                sender_id=sender,
-                group_name=group,
-                timestamp=timestamp,
-                reaction=Reaction(
-                    emoji=emoji,
-                    target_author=reaction.get("targetAuthor"),
-                    target_timestamp=reaction.get("targetSentTimestamp"),
-                    is_remove=reaction.get("isRemove", False),
-                ),
-            )
-
-        body = content.get("message")
-        if body:
-            logger.info(
-                f"Parsed message from {sender}"
-                + (f" in group {group}" if group else "")
-            )
-            return MessageResponse(
-                message=body,
-                sender_id=sender,
-                group_name=group,
-                timestamp=timestamp,
-            )
-
-    logger.warning("No parseable message or reaction found in output")
-    return None
 
 
 @mcp.tool()
@@ -334,17 +444,21 @@ async def send_message_to_user(
 async def send_message_to_group(
     message: str, group_id: str
 ) -> Union[SuccessResponse, ErrorResponse]:
-    """Send a message to a group using signal-cli."""
+    """Send a message to a group using signal-cli.
+
+    ``group_id`` may be the group's internal id (the ``group_name`` returned by
+    receive_message) or its display name.
+    """
     logger.info(f"Tool called: send_message_to_group for group {group_id}")
 
     try:
         _ensure_trusted(group_id)
-        group_name = await _get_group_id(group_id)
-        if not group_name:
+        gid = await _resolve_group_id(group_id)
+        if not gid:
             logger.error(f"Could not find group: {group_id}")
             return {"error": f"Could not find group: {group_id}"}
 
-        success = await _send_message(message, group_name, is_group=True)
+        success = await _send_message(message, gid, is_group=True)
         if success:
             logger.info(f"Successfully sent message to group {group_id}")
             return {"message": "Message sent successfully"}
@@ -405,16 +519,21 @@ async def send_reaction_to_group(
     """React to a message in a group with an emoji using signal-cli.
 
     ``group_id`` is the group's internal id (the ``group_name`` returned by
-    receive_message). ``target_author`` and ``target_timestamp`` identify the
-    message being reacted to. Set ``remove=True`` to undo a reaction.
+    receive_message) or its display name. ``target_author`` and
+    ``target_timestamp`` identify the message being reacted to. Set
+    ``remove=True`` to undo a reaction.
     """
     logger.info(f"Tool called: send_reaction_to_group for group {group_id}")
 
     try:
         _ensure_trusted(group_id)
+        gid = await _resolve_group_id(group_id)
+        if not gid:
+            return {"error": f"Could not find group: {group_id}"}
+
         success = await _send_reaction(
             emoji,
-            group_id,
+            gid,
             target_author,
             target_timestamp,
             is_group=True,
@@ -432,39 +551,28 @@ async def send_reaction_to_group(
 
 @mcp.tool()
 async def receive_message(timeout: float) -> MessageResponse:
-    """Wait for and receive a message using signal-cli."""
+    """Wait for and receive a message using signal-cli.
+
+    Returns the next actionable message (text body or emoji reaction) that
+    arrives within ``timeout`` seconds, or an empty result on timeout. Messages
+    that arrived while the daemon was streaming to this server are queued, so
+    back-to-back calls won't drop anything.
+    """
     logger.info(f"Tool called: receive_message with timeout {timeout}s")
 
     try:
-        cmd = f"signal-cli --output=json -u {shlex.quote(config.user_id)} receive --timeout {int(timeout)}"
-
-        stdout, stderr, return_code = await _run_signal_cli(cmd)
-
-        if return_code != 0:
-            if "timeout" in stderr.lower():
-                logger.info("Receive timeout reached with no messages")
-                return MessageResponse()
-            else:
-                logger.error(f"Error receiving message: {stderr}")
-                return MessageResponse(error=f"Failed to receive message: {stderr}")
-
-        if not stdout.strip():
+        result = await _client().next_message(timeout)
+        if result is None:
             logger.info("No message received within timeout")
             return MessageResponse()
-
-        result = await _parse_receive_output(stdout)
-        if result:
-            logger.info(
-                f"Successfully received message from {result.sender_id}"
-                + (f" in group {result.group_name}" if result.group_name else "")
-            )
-            return result
-        else:
-            # Envelopes arrived but none carried a body or reaction (e.g. only
-            # delivery/read receipts or typing indicators) — not an error.
-            logger.info("Received envelopes with no message or reaction")
-            return MessageResponse()
-
+        logger.info(
+            f"Successfully received message from {result.sender_id}"
+            + (f" in group {result.group_name}" if result.group_name else "")
+        )
+        return result
+    except SignalCLIError as e:
+        logger.error(f"Error receiving message: {e}")
+        return MessageResponse(error=str(e))
     except Exception as e:
         logger.error(f"Error in receive_message: {str(e)}", exc_info=True)
         return MessageResponse(error=str(e))
@@ -485,38 +593,60 @@ def initialize_server() -> SignalConfig:
         help="Transport to use for communication with the client. (default: sse)",
     )
     parser.add_argument(
+        "--rpc-host",
+        default=os.environ.get("SIGNAL_CLI_RPC_HOST", "127.0.0.1"),
+        help="Host of the signal-cli daemon JSON-RPC interface "
+        "(default: 127.0.0.1, env: SIGNAL_CLI_RPC_HOST)",
+    )
+    parser.add_argument(
+        "--rpc-port",
+        type=int,
+        default=int(os.environ.get("SIGNAL_CLI_RPC_PORT", "7583")),
+        help="Port of the signal-cli daemon JSON-RPC interface "
+        "(default: 7583, env: SIGNAL_CLI_RPC_PORT)",
+    )
+    parser.add_argument(
         "--trusted-recipient",
         action="append",
         default=[],
         dest="trusted_recipients",
         metavar="RECIPIENT",
         help=(
-            "Phone number or group id the server is allowed to message. Repeat "
-            "the flag to allow several. Values from the SIGNAL_TRUSTED_RECIPIENTS "
-            "env var (comma-separated) are added too. If no trusted recipients "
-            "are configured, every recipient is permitted."
+            "Phone number or group id/name the server is allowed to message. "
+            "Repeat the flag to allow several. Values from the "
+            "SIGNAL_TRUSTED_RECIPIENTS env var (comma-separated) are added too. "
+            "If no trusted recipients are configured, every recipient is "
+            "permitted."
         ),
     )
 
     args = parser.parse_args()
-    logger.info(f"Parsed arguments: user_id={args.user_id}, transport={args.transport}")
+    logger.info(
+        f"Parsed arguments: user_id={args.user_id}, transport={args.transport}, "
+        f"rpc={args.rpc_host}:{args.rpc_port}"
+    )
 
     # Set global config
     config.user_id = args.user_id
     config.transport = args.transport
+    config.rpc_host = args.rpc_host
+    config.rpc_port = args.rpc_port
     config.trusted_recipients = _load_trusted_recipients(args.trusted_recipients)
 
     if config.trusted_recipients:
         logger.info(
-            f"Trusted recipients enforced ({len(config.trusted_recipients)} entries); "
-            "sends to other recipients will be rejected"
+            f"Trusted recipients enforced ({len(config.trusted_recipients)} "
+            "entries); sends to other recipients will be rejected"
         )
     else:
         logger.warning(
             "No trusted recipients configured; the server may message any recipient"
         )
 
-    logger.info(f"Initialized Signal server for user: {config.user_id}")
+    logger.info(
+        f"Initialized Signal server for user {config.user_id} "
+        f"(daemon {config.rpc_host}:{config.rpc_port})"
+    )
     return config
 
 

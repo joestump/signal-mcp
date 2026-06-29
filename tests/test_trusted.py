@@ -5,12 +5,15 @@ from signal_mcp.main import (
     UntrustedRecipientError,
     _ensure_trusted,
     _load_trusted_recipients,
+    send_message_to_group,
     send_message_to_user,
+    send_reaction_to_group,
     send_reaction_to_user,
 )
 
 ALICE = "+15555550101"
 MALLORY = "+15555550199"
+GROUP = "GID=="
 
 
 def test_ensure_trusted_allows_everything_when_unconfigured(monkeypatch):
@@ -100,6 +103,76 @@ def test_send_reaction_to_user_blocks_untrusted(monkeypatch):
 
     result = asyncio.run(
         send_reaction_to_user("\U0001f44d", MALLORY, MALLORY, 1782554453770)
+    )
+
+    assert "error" in result
+    assert called is False
+
+
+def test_send_message_to_group_blocks_untrusted(monkeypatch):
+    """An untrusted group is rejected before group resolution or any send."""
+    resolved = False
+    sent = False
+
+    async def fake_resolve(name_or_id):
+        nonlocal resolved
+        resolved = True
+        return name_or_id
+
+    async def fake_send(*args, **kwargs):
+        nonlocal sent
+        sent = True
+        return True
+
+    monkeypatch.setattr(main, "_resolve_group_id", fake_resolve)
+    monkeypatch.setattr(main, "_send_message", fake_send)
+    monkeypatch.setattr(main.config, "trusted_recipients", frozenset({GROUP}))
+
+    result = asyncio.run(send_message_to_group("hi", "OTHER_GID=="))
+
+    assert "error" in result
+    assert resolved is False  # never resolved the group
+    assert sent is False  # never asked the daemon to send
+
+
+def test_send_message_to_group_allows_trusted(monkeypatch):
+    async def fake_resolve(name_or_id):
+        return name_or_id
+
+    sent = {}
+
+    async def fake_send(message, target, is_group=False):
+        sent["target"] = target
+        sent["is_group"] = is_group
+        return True
+
+    monkeypatch.setattr(main, "_resolve_group_id", fake_resolve)
+    monkeypatch.setattr(main, "_send_message", fake_send)
+    monkeypatch.setattr(main.config, "trusted_recipients", frozenset({GROUP}))
+
+    result = asyncio.run(send_message_to_group("hi", GROUP))
+
+    assert result == {"message": "Message sent successfully"}
+    assert sent == {"target": GROUP, "is_group": True}
+
+
+def test_send_reaction_to_group_blocks_untrusted(monkeypatch):
+    called = False
+
+    async def fake_reaction(*args, **kwargs):
+        nonlocal called
+        called = True
+        return True
+
+    async def fake_resolve(name_or_id):
+        return name_or_id
+
+    monkeypatch.setattr(main, "_send_reaction", fake_reaction)
+    monkeypatch.setattr(main, "_resolve_group_id", fake_resolve)
+    monkeypatch.setattr(main.config, "trusted_recipients", frozenset({GROUP}))
+
+    result = asyncio.run(
+        send_reaction_to_group("\U0001f44d", "OTHER_GID==", MALLORY, 1782554453770)
     )
 
     assert "error" in result
