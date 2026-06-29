@@ -1,7 +1,7 @@
 [project]
 name = "signal-mcp"
 version = "0.1.0"
-description = "MCP server for signal-cli — send and receive Signal messages and reactions via a signal-cli daemon."
+description = "MCP server for signal-cli — send and receive Signal messages and emoji reactions via a signal-cli daemon, with a trusted-recipients allowlist."
 readme = "README.md"
 requires-python = ">=3.13"
 license = "MIT"
