@@ -97,6 +97,68 @@ or `send_reaction_*` call targeting a recipient that is not on it is rejected
 with an error before the daemon is asked to send. When no trusted recipients
 are configured, enforcement is disabled and every recipient is permitted.
 
+## Using with Claude (MCP client setup)
+
+Claude Desktop and Claude Code launch the server as a subprocess and talk to it
+over **stdio**, so configure it with `--transport stdio`. The `signal-cli daemon`
+must already be running (see [Usage](#usage)) — the MCP server is just a client
+to it.
+
+The launch command below uses [`uv`](https://docs.astral.sh/uv/) to run the
+`server` entry point from a checkout. Replace `/ABSOLUTE/PATH/TO/signal-mcp`
+with the path to this repository and `+15551234567` with your Signal number.
+
+### Claude Desktop
+
+Edit `claude_desktop_config.json` (Settings → Developer → Edit Config), which
+lives at:
+
+- **macOS:** `~/Library/Application Support/Claude/claude_desktop_config.json`
+- **Windows:** `%APPDATA%\Claude\claude_desktop_config.json`
+- **Linux:** `~/.config/Claude/claude_desktop_config.json`
+
+Add a `signal` entry under `mcpServers`:
+
+```json
+{
+  "mcpServers": {
+    "signal": {
+      "command": "uv",
+      "args": [
+        "run",
+        "--directory", "/ABSOLUTE/PATH/TO/signal-mcp",
+        "server",
+        "--user-id", "+15551234567",
+        "--transport", "stdio"
+      ]
+    }
+  }
+}
+```
+
+Restart Claude Desktop for the change to take effect. To enforce the allowlist,
+add more `args` (e.g. `"--trusted-recipient", "+15555550101"`) or set
+`SIGNAL_TRUSTED_RECIPIENTS` / `SIGNAL_CLI_RPC_HOST` / `SIGNAL_CLI_RPC_PORT` via
+an `"env": { ... }` object in the same block.
+
+### Claude Code
+
+Add the server with the `claude mcp add` CLI (everything after `--` is the
+launch command):
+
+```bash
+claude mcp add signal -- \
+  uv run --directory /ABSOLUTE/PATH/TO/signal-mcp \
+  server --user-id +15551234567 --transport stdio
+```
+
+Use `--scope user` to make it available across all your projects (default is
+the current project), and `--env KEY=value` (before the `--`) to pass
+`SIGNAL_TRUSTED_RECIPIENTS` or the `SIGNAL_CLI_RPC_*` variables. This writes an
+`mcpServers` entry to your Claude Code config; you can also hand-edit
+`.mcp.json` (project scope) with the same JSON shape shown above. Verify with
+`claude mcp list`.
+
 ## API
 
 ### Tools Available
