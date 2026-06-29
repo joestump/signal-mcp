@@ -289,6 +289,11 @@ uv run --extra test pytest   # tests
 Tests use a `FakeClient` stand-in for the daemon and JSON fixtures for the
 parser, so no live `signal-cli` daemon is required.
 
+## Acknowledgments
+
+Forked from [rymurr/signal-mcp](https://github.com/rymurr/signal-mcp) by
+[Ryan Murray](https://github.com/rymurr).
+
 ## License
 
 Released under the [MIT License](LICENSE).
