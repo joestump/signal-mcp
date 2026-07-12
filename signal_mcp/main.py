@@ -25,6 +25,8 @@ outage never loses data.
 """
 
 from mcp.server.fastmcp import FastMCP
+from mcp.server.stdio import stdio_server
+from mcp.types import JSONRPCMessage, JSONRPCNotification
 from typing import Optional, Dict, Union, Any
 import asyncio
 import json
@@ -32,6 +34,7 @@ import os
 import argparse
 from dataclasses import dataclass, field
 import logging
+import anyio
 
 # Set up logging with more detailed format
 logging.basicConfig(
@@ -56,6 +59,8 @@ class SignalConfig:
     # server is permitted to message. When empty, enforcement is disabled and
     # every recipient is allowed (opt-in security).
     trusted_recipients: frozenset[str] = field(default_factory=frozenset)
+    channel_mode: bool = False
+    prefix: str = ""
 
 
 @dataclass
@@ -343,6 +348,79 @@ def _client() -> SignalRpcClient:
     return client
 
 
+# --------------------------------------------------------------------------- #
+# Claude Channel support
+# --------------------------------------------------------------------------- #
+
+CHANNEL_INSTRUCTIONS = """\
+This is a Signal messaging channel. The user can message you from their phone
+via Signal, and you can message them back.
+
+Inbound messages from Signal arrive as <channel source="signal" sender="..." \
+sender_name="..." group="...">. The body text is the content.
+Use send_message_to_user with the sender attribute as user_id to reply.
+Use send to proactively message the user's phone (no phone number needed).
+Always reply to acknowledge inbound messages, even if briefly.
+"""
+
+
+async def _forward_channel_messages(
+    write_stream: Any,
+) -> None:
+    """Background task: forward signal-cli messages to Claude as channel events.
+
+    Runs alongside the MCP server. Reads messages from the signal-cli daemon's
+    receive queue and pushes them as ``notifications/claude/channel`` so Claude
+    sees them in real time without needing to poll ``receive_message``.
+    """
+    rpc = _client()
+    try:
+        await rpc._ensure_connected()
+    except SignalCLIError as e:
+        logger.error(f"Channel forwarder: cannot connect to signal-cli: {e}")
+        return
+
+    logger.info("Channel forwarder: listening for messages")
+
+    while True:
+        try:
+            msg = await rpc.next_message(timeout=3600)
+            if msg is None:
+                continue
+            # Only forward text messages, not reactions.
+            if not msg.message:
+                continue
+
+            text = msg.message
+
+            # Prefix filtering — if configured, only forward messages that
+            # start with the prefix. The prefix is stripped before delivery.
+            if config.prefix:
+                stripped = text.lstrip()
+                if not stripped.lower().startswith(config.prefix.lower()):
+                    continue
+                text = stripped[len(config.prefix) :].lstrip()
+
+            meta: Dict[str, str] = {"sender": msg.sender_id or ""}
+            if msg.group_name:
+                meta["group"] = msg.group_name
+
+            notification = JSONRPCMessage(
+                root=JSONRPCNotification(
+                    jsonrpc="2.0",
+                    method="notifications/claude/channel",
+                    params={"content": text, "meta": meta},
+                )
+            )
+            await write_stream.send(notification)
+            logger.info(f"Channel forwarder: forwarded message from {msg.sender_id}")
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:  # noqa: BLE001
+            logger.error(f"Channel forwarder error: {e}")
+            await asyncio.sleep(1)
+
+
 async def _resolve_group_id(name_or_id: str) -> Optional[str]:
     """Resolve a group name *or* id to the group's internal id."""
     logger.info(f"Resolving group: {name_or_id}")
@@ -550,6 +628,30 @@ async def send_reaction_to_group(
 
 
 @mcp.tool()
+async def send(message: str) -> Union[SuccessResponse, ErrorResponse]:
+    """Send a message to the channel owner's phone.
+
+    Use this when the user asks to "send a message", "text me", or anything
+    about sending to Signal. No phone number needed — it sends to the channel
+    owner's number.
+    """
+    logger.info("Tool called: send")
+    if not config.user_id:
+        return {"error": "No user_id configured (set --user-id)"}
+    try:
+        _ensure_trusted(config.user_id)
+        success = await _send_message(message, config.user_id, is_group=False)
+        if success:
+            return {"message": "Message sent successfully"}
+        return {"error": "Failed to send message"}
+    except UntrustedRecipientError as e:
+        return {"error": str(e)}
+    except Exception as e:
+        logger.error(f"Error in send: {str(e)}", exc_info=True)
+        return {"error": str(e)}
+
+
+@mcp.tool()
 async def receive_message(timeout: float) -> MessageResponse:
     """Wait for and receive a message using signal-cli.
 
@@ -622,6 +724,21 @@ def initialize_server() -> SignalConfig:
             "permitted."
         ),
     )
+    parser.add_argument(
+        "--channel",
+        action="store_true",
+        default=os.environ.get("SIGNAL_MCP_CHANNEL", "").lower()
+        in ("1", "true", "yes"),
+        help="Enable Claude Channel mode — push messages to Claude via "
+        "notifications/claude/channel instead of requiring polling. "
+        "(env: SIGNAL_MCP_CHANNEL)",
+    )
+    parser.add_argument(
+        "--prefix",
+        default=os.environ.get("SIGNAL_MCP_PREFIX", ""),
+        help="Only forward messages starting with this prefix (channel mode). "
+        "The prefix is stripped before delivery. (env: SIGNAL_MCP_PREFIX)",
+    )
 
     args = parser.parse_args()
 
@@ -638,7 +755,8 @@ def initialize_server() -> SignalConfig:
 
     logger.info(
         f"Parsed arguments: user_id={args.user_id}, transport={args.transport}, "
-        f"rpc={args.rpc_host}:{args.rpc_port}"
+        f"rpc={args.rpc_host}:{args.rpc_port}, channel={args.channel}, "
+        f"prefix={args.prefix!r}"
     )
 
     # Set global config
@@ -647,6 +765,14 @@ def initialize_server() -> SignalConfig:
     config.rpc_host = args.rpc_host
     config.rpc_port = args.rpc_port
     config.trusted_recipients = _load_trusted_recipients(args.trusted_recipients)
+    config.channel_mode = args.channel
+    config.prefix = args.prefix
+
+    # In channel mode, set instructions and use stdio transport.
+    if config.channel_mode:
+        config.transport = "stdio"
+        mcp._mcp_server.instructions = CHANNEL_INSTRUCTIONS
+        logger.info("Claude Channel mode enabled")
 
     if config.trusted_recipients:
         logger.info(
@@ -680,22 +806,37 @@ def _load_trusted_recipients(cli_recipients: list[str]) -> frozenset[str]:
     )
 
 
-def run_mcp_server():
-    """Run the MCP server in the current event loop."""
-    config = initialize_server()
+async def run_channel_async() -> None:
+    """Run the MCP server in Claude Channel mode over stdio.
 
-    transport = config.transport
-    logger.info(f"Starting MCP server with transport: {transport}")
-
-    return transport
+    Declares the ``claude/channel`` experimental capability and starts a
+    background task that forwards inbound signal-cli messages to Claude as
+    ``notifications/claude/channel`` events.
+    """
+    async with stdio_server() as (read_stream, write_stream):
+        init_options = mcp._mcp_server.create_initialization_options(
+            experimental_capabilities={"claude/channel": {}}
+        )
+        forwarder = asyncio.create_task(_forward_channel_messages(write_stream))
+        try:
+            await mcp._mcp_server.run(read_stream, write_stream, init_options)
+        finally:
+            forwarder.cancel()
+            try:
+                await forwarder
+            except asyncio.CancelledError:
+                pass
 
 
 def main():
     """Main function to run the Signal MCP server."""
     logger.info("Starting Signal MCP server")
     try:
-        transport = run_mcp_server()
-        mcp.run(transport)
+        cfg = initialize_server()
+        if cfg.channel_mode:
+            anyio.run(run_channel_async)
+        else:
+            mcp.run(cfg.transport)
     except Exception as e:
         logger.error(f"Error running Signal MCP server: {str(e)}", exc_info=True)
         raise

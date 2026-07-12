@@ -3,7 +3,9 @@
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 ## Commands
-- Run: `python main.py --user-id YOUR_PHONE_NUMBER [--transport {sse|stdio}]`
+- Run: `python signal_mcp/main.py --user-id YOUR_PHONE_NUMBER [--transport {sse|stdio}]`
+- Run with channel mode: `python signal_mcp/main.py --user-id YOUR_PHONE_NUMBER --channel [--prefix PREFIX]`
+- Test: `uv run pytest tests/`
 - Lint: `ruff check .`
 - Type check: `mypy .`
 - Format code: `ruff format .`
