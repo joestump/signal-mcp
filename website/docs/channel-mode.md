@@ -5,19 +5,19 @@ description: Push incoming Signal messages to Claude in real time without pollin
 
 # Claude Channel Mode
 
-Channel mode is a powerful integration with [Claude Code](https://code.claude.com/) that pushes incoming Signal messages directly to Claude as they arrive — no polling required.
+Channel mode is a powerful integration with [Claude Code](https://code.claude.com/) and [Crush](https://github.com/charmbracelet/crush) that pushes incoming Signal messages directly to your agent as they arrive — no polling required.
 
 ## How it works
 
 Instead of Claude calling `receive_message` in a loop, the MCP server runs a background task that watches the signal-cli daemon's message queue. When a new message arrives, it's immediately forwarded to Claude via the `notifications/claude/channel` MCP notification.
 
 ```
-Phone ──► Signal servers ──► signal-cli daemon ──► Signal MCP ──► Claude Code
+Phone ──► Signal servers ──► signal-cli daemon ──► Signal MCP ──► Agent (Claude/Crush)
                                                          │
                                           notifications/claude/channel
 ```
 
-Claude sees the message as a `<channel>` tag in its conversation context and can respond immediately using the `send` or `send_message_to_user` tools.
+Claude sees the message as a `<channel>` tag in its conversation context (Crush does the same) and can respond immediately using the `send` or `send_message_to_user` tools.
 
 ## Enabling channel mode
 
@@ -59,7 +59,7 @@ Then start Claude Code with the channel loaded:
 claude --dangerously-load-development-channels server:signal
 ```
 
-Send a **Note to Self** on Signal from your phone. Claude will see it arrive in real time.
+Send a **Note to Self** on Signal from your phone. Your agent will see it arrive in real time.
 
 ## Prefix filtering
 
@@ -104,9 +104,9 @@ Incoming messages arrive in Claude's context as `<channel>` tags:
 
 ## Reply tools
 
-Claude has two ways to respond:
+Agents have two ways to respond:
 
-1. **`send`** — sends to the channel owner's phone (the `--user-id` number). Use when Claude proactively wants to notify you.
+1. **`send`** — sends to the channel owner's phone (the `--user-id` number). Use when the agent proactively wants to notify you.
 2. **`send_message_to_user`** — sends to any phone number. Use when replying to a specific sender from a channel message.
 
 ## Security considerations
