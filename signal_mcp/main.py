@@ -414,6 +414,19 @@ async def _forward_channel_messages(
             )
             await write_stream.send(notification)
             logger.info(f"Channel forwarder: forwarded message from {msg.sender_id}")
+
+            # Auto-mark as read so Signal shows the message as delivered/read.
+            if msg.sender_id and msg.timestamp:
+                try:
+                    await _send_receipt(
+                        msg.sender_id,
+                        msg.timestamp,
+                        group_id=msg.group_name,
+                    )
+                except Exception:  # noqa: BLE001
+                    logger.warning(
+                        "Channel forwarder: failed to send read receipt"
+                    )
         except asyncio.CancelledError:
             raise
         except Exception as e:  # noqa: BLE001
@@ -437,6 +450,30 @@ async def _resolve_group_id(name_or_id: str) -> Optional[str]:
 
     logger.error(f"Could not find group: {name_or_id}")
     return None
+
+
+async def _send_receipt(
+    sender: str,
+    target_timestamp: int,
+    group_id: Optional[str] = None,
+) -> bool:
+    """Send a read receipt for a received message via the daemon."""
+    params: Dict[str, Any] = {
+        "recipient": [sender],
+        "targetTimestamp": int(target_timestamp),
+        "type": "read",
+    }
+    if group_id:
+        params.pop("recipient")
+        params["groupId"] = group_id
+
+    try:
+        await _client().call("sendReceipt", params)
+        logger.info(f"Sent read receipt for message from {sender}")
+        return True
+    except SignalCLIError as e:
+        logger.error(f"Failed to send read receipt: {e}")
+        return False
 
 
 async def _send_message(message: str, target: str, is_group: bool = False) -> bool:
@@ -678,6 +715,33 @@ async def receive_message(timeout: float) -> MessageResponse:
     except Exception as e:
         logger.error(f"Error in receive_message: {str(e)}", exc_info=True)
         return MessageResponse(error=str(e))
+
+
+@mcp.tool()
+async def mark_read(
+    sender: str,
+    target_timestamp: int,
+    group_id: Optional[str] = None,
+) -> Union[SuccessResponse, ErrorResponse]:
+    """Mark a received message as read.
+
+    Use this after receiving a message with ``receive_message`` to send a read
+    receipt back to Signal. Pass the ``sender_id`` and ``timestamp`` from the
+    received message.
+
+    - ``sender`` *(str)* — the sender's phone number (E.164), from ``sender_id``.
+    - ``target_timestamp`` *(int)* — the message timestamp, from ``timestamp``.
+    - ``group_id`` *(str, optional)* — if the message was in a group, the group id.
+    """
+    logger.info(f"Tool called: mark_read from {sender} ts={target_timestamp}")
+
+    if not sender or not target_timestamp:
+        return {"error": "Both sender and target_timestamp are required"}
+
+    success = await _send_receipt(sender, target_timestamp, group_id=group_id)
+    if success:
+        return {"message": "Read receipt sent"}
+    return {"error": "Failed to send read receipt"}
 
 
 def initialize_server() -> SignalConfig:
