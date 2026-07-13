@@ -11,7 +11,6 @@ from signal_mcp.main import (
 )
 
 OTHER = "+11234567890"
-GROUP_ID = "group-123=="
 TIMESTAMP = 1744185565466
 
 
@@ -50,21 +49,18 @@ def test_send_receipt_direct_message(monkeypatch):
     assert params["recipient"] == [OTHER]
     assert params["targetTimestamp"] == TIMESTAMP
     assert params["type"] == "read"
-    assert "groupId" not in params
 
 
-def test_send_receipt_group_message(monkeypatch):
-    """Group message read receipt uses groupId param instead of recipient."""
+def test_send_receipt_always_uses_recipient_not_group(monkeypatch):
+    """Read receipts always address the author, never a groupId."""
     fake = FakeClient()
     monkeypatch.setattr(main, "client", fake)
 
-    ok = asyncio.run(_send_receipt(OTHER, TIMESTAMP, group_id=GROUP_ID))
+    ok = asyncio.run(_send_receipt(OTHER, TIMESTAMP))
     assert ok is True
     method, params = fake.calls[-1]
-    assert method == "sendReceipt"
-    assert "recipient" not in params
-    assert params["groupId"] == GROUP_ID
-    assert params["targetTimestamp"] == TIMESTAMP
+    assert "groupId" not in params
+    assert params["recipient"] == [OTHER]
 
 
 def test_send_receipt_coerces_timestamp_to_int(monkeypatch):
@@ -101,24 +97,13 @@ def test_mark_read_success(monkeypatch):
     assert result == {"message": "Read receipt sent"}
 
 
-def test_mark_read_with_group(monkeypatch):
-    """mark_read passes group_id through to _send_receipt."""
-    fake = FakeClient()
-    monkeypatch.setattr(main, "client", fake)
-
-    result = asyncio.run(mark_read(OTHER, TIMESTAMP, group_id=GROUP_ID))
-    assert result == {"message": "Read receipt sent"}
-    method, params = fake.calls[-1]
-    assert params["groupId"] == GROUP_ID
-
-
-def test_mark_read_missing_sender(monkeypatch):
+def test_mark_read_missing_sender():
     """mark_read returns an error when sender is empty."""
     result = asyncio.run(mark_read("", TIMESTAMP))
     assert "error" in result
 
 
-def test_mark_read_missing_timestamp(monkeypatch):
+def test_mark_read_missing_timestamp():
     """mark_read returns an error when timestamp is 0 (falsy)."""
     result = asyncio.run(mark_read(OTHER, 0))
     assert "error" in result

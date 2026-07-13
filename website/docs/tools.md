@@ -107,7 +107,6 @@ Mark a received message as read in Signal. In channel mode this happens automati
 |-----------|------|----------|-------------|
 | `sender` | `str` | Yes | Sender phone number (from `sender_id` in the received message) |
 | `target_timestamp` | `int` | Yes | Message timestamp (from `timestamp` in the received message) |
-| `group_id` | `str` | No | Group ID if the message was in a group |
 
 ```python
 result = await mark_read(

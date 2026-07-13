@@ -418,15 +418,9 @@ async def _forward_channel_messages(
             # Auto-mark as read so Signal shows the message as delivered/read.
             if msg.sender_id and msg.timestamp:
                 try:
-                    await _send_receipt(
-                        msg.sender_id,
-                        msg.timestamp,
-                        group_id=msg.group_name,
-                    )
+                    await _send_receipt(msg.sender_id, msg.timestamp)
                 except Exception:  # noqa: BLE001
-                    logger.warning(
-                        "Channel forwarder: failed to send read receipt"
-                    )
+                    logger.warning("Channel forwarder: failed to send read receipt")
         except asyncio.CancelledError:
             raise
         except Exception as e:  # noqa: BLE001
@@ -455,17 +449,18 @@ async def _resolve_group_id(name_or_id: str) -> Optional[str]:
 async def _send_receipt(
     sender: str,
     target_timestamp: int,
-    group_id: Optional[str] = None,
 ) -> bool:
-    """Send a read receipt for a received message via the daemon."""
+    """Send a read receipt for a received message via the daemon.
+
+    Read receipts are always addressed to the individual author of the message,
+    even when it was posted in a group — signal-cli has no ``groupId`` param
+    for ``sendReceipt``.
+    """
     params: Dict[str, Any] = {
         "recipient": [sender],
         "targetTimestamp": int(target_timestamp),
         "type": "read",
     }
-    if group_id:
-        params.pop("recipient")
-        params["groupId"] = group_id
 
     try:
         await _client().call("sendReceipt", params)
@@ -721,7 +716,6 @@ async def receive_message(timeout: float) -> MessageResponse:
 async def mark_read(
     sender: str,
     target_timestamp: int,
-    group_id: Optional[str] = None,
 ) -> Union[SuccessResponse, ErrorResponse]:
     """Mark a received message as read.
 
@@ -731,14 +725,13 @@ async def mark_read(
 
     - ``sender`` *(str)* — the sender's phone number (E.164), from ``sender_id``.
     - ``target_timestamp`` *(int)* — the message timestamp, from ``timestamp``.
-    - ``group_id`` *(str, optional)* — if the message was in a group, the group id.
     """
     logger.info(f"Tool called: mark_read from {sender} ts={target_timestamp}")
 
     if not sender or not target_timestamp:
         return {"error": "Both sender and target_timestamp are required"}
 
-    success = await _send_receipt(sender, target_timestamp, group_id=group_id)
+    success = await _send_receipt(sender, target_timestamp)
     if success:
         return {"message": "Read receipt sent"}
     return {"error": "Failed to send read receipt"}
