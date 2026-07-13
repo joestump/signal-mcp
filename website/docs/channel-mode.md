@@ -15,6 +15,8 @@ Instead of Claude calling `receive_message` in a loop, the MCP server runs a bac
 Phone ──► Signal servers ──► signal-cli daemon ──► Signal MCP ──► Agent (Claude/Crush)
                                                          │
                                           notifications/claude/channel
+                                                         │
+                                              sendReceipt (auto mark-read)
 ```
 
 Claude sees the message as a `<channel>` tag in its conversation context (Crush does the same) and can respond immediately using the `send` or `send_message_to_user` tools.

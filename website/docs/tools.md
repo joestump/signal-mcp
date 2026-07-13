@@ -98,3 +98,20 @@ if result.message:
 elif result.reaction:
     print(f"Got reaction: {result.reaction.emoji}")
 ```
+
+## `mark_read`
+
+Mark a received message as read in Signal. In channel mode this happens automatically when a message is forwarded. In normal (polling) mode, call this after `receive_message` to send a read receipt.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `sender` | `str` | Yes | Sender phone number (from `sender_id` in the received message) |
+| `target_timestamp` | `int` | Yes | Message timestamp (from `timestamp` in the received message) |
+| `group_id` | `str` | No | Group ID if the message was in a group |
+
+```python
+result = await mark_read(
+    sender="+15551234567",
+    target_timestamp=1744185565466,
+)
+```
