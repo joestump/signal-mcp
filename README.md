@@ -17,6 +17,11 @@ reactions — through a long-running `signal-cli daemon`.
   - [Configuration](#configuration)
   - [Restricting recipients](#restricting-recipients-trusted-recipients)
 - [Using with Claude](#using-with-claude-mcp-client-setup)
+- [Claude Channel mode](#claude-channel-mode)
+  - [How it works](#how-channel-mode-works)
+  - [Channel mode configuration](#channel-mode-configuration)
+  - [Prefix filtering](#prefix-filtering)
+  - [Claude Code channel setup](#claude-code-channel-setup)
 - [Tools](#tools)
 - [Development](#development)
 
@@ -201,11 +206,90 @@ settings. This writes an `mcpServers` entry to your Claude Code config; you can
 also hand-edit `.mcp.json` (project scope) with the same JSON shape shown above.
 Verify with `claude mcp list`.
 
+## Claude Channel mode
+
+Claude Code supports a **channel** transport that pushes incoming messages to
+Claude in real time instead of requiring Claude to poll `receive_message`. In
+this mode the server runs a background forwarder that listens on the signal-cli
+daemon and emits `notifications/claude/channel` JSON-RPC notifications to
+Claude as messages arrive.
+
+Channel mode is useful when you want Claude to react immediately to incoming
+Signal messages without a polling loop — Claude "sees" every message the
+moment it arrives.
+
+### How channel mode works
+
+- Transport is forced to **stdio** (Claude launches the server as a
+  subprocess, same as normal stdio mode).
+- The server declares the `claude/channel` experimental capability so Claude
+  knows to expect push notifications.
+- A background task listens on the signal-cli daemon and forwards each text
+  message as a `notifications/claude/channel` notification. Reactions are not
+  forwarded.
+- Claude receives messages wrapped as `<channel source="signal"
+  sender="..." sender_name="..." group="...">`, and can reply with the
+  `send` tool (no recipient needed — it always messages the channel owner's
+  phone).
+
+### Channel mode configuration
+
+| Flag | Env var | Default | Description |
+| --- | --- | --- | --- |
+| `--channel` | `SIGNAL_MCP_CHANNEL` | `false` | Enable Claude Channel mode. |
+| `--prefix` | `SIGNAL_MCP_PREFIX` | *(none)* | Only forward messages starting with this prefix (case-insensitive). The prefix is stripped before delivery. |
+
+All other flags (`--user-id`, `--rpc-host`, `--rpc-port`,
+`--trusted-recipient`) work the same as in normal mode.
+
+### Prefix filtering
+
+When `--prefix` is set, only messages whose body starts with the prefix (after
+leading whitespace, case-insensitive) are forwarded to Claude. The prefix is
+stripped from the message before delivery. Messages that don't match are
+dropped silently.
+
+This is useful when the signal-cli daemon receives messages from multiple
+sources and you only want Claude to see a subset — for example, only messages
+prefixed with `claude`:
+
+```bash
+uv run server --user-id YOUR_PHONE_NUMBER --channel --prefix "claude"
+```
+
+### Claude Code channel setup
+
+Add the server with the `--channel` flag:
+
+```bash
+claude mcp add signal \
+  --scope user \
+  --env SIGNAL_MCP_TRUSTED_RECIPIENTS=+15555550101 \
+  -- uv run --directory /ABSOLUTE/PATH/TO/signal-mcp \
+     server --user-id +15551234567 --channel
+```
+
+The `--prefix` flag is optional — add it if you want selective forwarding:
+
+```bash
+claude mcp add signal \
+  -- uv run --directory /ABSOLUTE/PATH/TO/signal-mcp \
+     server --user-id +15551234567 --channel --prefix "claude"
+```
+
 ## Tools
 
-The server exposes five tools. Every `send_*` tool returns
+The server exposes **six** tools in normal mode and **seven** in channel mode
+(which adds `send`). Every `send_*` tool returns
 `{"message": "..."}` on success or `{"error": "..."}` on failure (including
 when a recipient is blocked by the allowlist).
+
+### `send(message)` *(channel mode only)*
+
+Send a message to the channel owner's phone. No recipient is needed — it
+always messages the `--user-id` account.
+
+- `message` *(str)* — the text to send.
 
 ### `send_message_to_user(message, user_id)`
 
