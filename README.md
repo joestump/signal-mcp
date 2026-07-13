@@ -1,7 +1,7 @@
 # Signal MCP
 
 > [!NOTE]
-> A maintained fork of [rymurr/signal-mcp](https://github.com/rymurr/signal-mcp), whose last upstream commit was Apr 9, 2025 with none since — now maintained by [Joe Stump](https://github.com/joestump) and [Claude Code](https://claude.com/claude-code).
+> A maintained fork of [rymurr/signal-mcp](https://github.com/rymurr/signal-mcp) (abandoned) and [BrendanMartin/claude-channel-signal](https://github.com/BrendanMartin/claude-channel-signal) (abandoned) — now maintained by [Joe Stump](https://github.com/joestump) and [Claude Code](https://claude.com/claude-code).
 
 An [MCP](https://modelcontextprotocol.io) server for [signal-cli](https://github.com/AsamK/signal-cli)
 that lets AI agents send and receive Signal messages — including emoji
@@ -63,7 +63,7 @@ installed and a Signal account registered with it.
    signal-cli -a YOUR_PHONE_NUMBER verify CODE_RECEIVED
    ```
 
-For more detail, see the [signal-cli documentation](https://github.com/AsamK/signal-cli/wiki).
+For more detail, see the [Signal MCP documentation](https://joestump.github.io/signal-mcp/).
 Phone numbers are in [E.164](https://en.wikipedia.org/wiki/E.164) format
 (e.g. `+15551234567`).
 
