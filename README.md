@@ -279,12 +279,12 @@ claude mcp add signal \
 
 ## Tools
 
-The server exposes **six** tools in normal mode and **seven** in channel mode
-(which adds `send`). Every `send_*` tool returns
+The server exposes **seven** tools. In channel mode, messages are automatically
+marked as read when forwarded. Every `send_*` and `mark_read` tool returns
 `{"message": "..."}` on success or `{"error": "..."}` on failure (including
 when a recipient is blocked by the allowlist).
 
-### `send(message)` *(channel mode only)*
+### `send(message)`
 
 Send a message to the channel owner's phone. No recipient is needed — it
 always messages the `--user-id` account.
@@ -363,6 +363,18 @@ When the message is a reaction, `reaction` holds:
 On timeout (or for non-actionable traffic like delivery/read receipts and
 typing indicators) an empty `MessageResponse` is returned — all fields `null`,
 which is **not** an error.
+
+### `mark_read(sender, target_timestamp)`
+
+Mark a received message as read in Signal. Useful in normal (polling) mode
+after `receive_message` returns. In channel mode this is done automatically.
+
+- `sender` *(str)* — the sender's phone number (use `sender_id` from the
+  received message).
+- `target_timestamp` *(int)* — the message timestamp (use `timestamp` from
+  the received message).
+
+Returns `{"message": "Read receipt sent"}` on success.
 
 ## Development
 
