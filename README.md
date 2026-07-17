@@ -122,6 +122,8 @@ set. All variables use the `SIGNAL_MCP_` prefix to avoid collisions.
 | `--trusted-recipient` | `SIGNAL_MCP_TRUSTED_RECIPIENTS` | *(none)* | Allowlist of recipients the server may message (comma-separated in the env var). See below. |
 | `--trusted-sender` | `SIGNAL_MCP_TRUSTED_SENDERS` | *(none)* | Allowlist of message authors whose inbound messages reach the agent (comma-separated in the env var). In channel mode, when unset, only messages from `--user-id` are forwarded. See below. |
 | `--attachments-dir` | `SIGNAL_MCP_ATTACHMENTS_DIR` | `~/.local/share/signal-cli/attachments` | Directory where signal-cli stores received attachment files. See [Inbound attachments](#inbound-attachments). |
+| `--attachment-transfer` | `SIGNAL_MCP_ATTACHMENT_TRANSFER` | `auto` | How outbound file attachments reach the daemon: `path`, `data-uri`, or `auto`. See [Attachments](#attachments). |
+| `--attachment-max-bytes` | `SIGNAL_MCP_ATTACHMENT_MAX_BYTES` | `26214400` (25 MB) | Largest local file that may be encoded as a data URI. See [Attachments](#attachments). |
 | `--log-level` | `SIGNAL_MCP_LOG_LEVEL` | `INFO` | Logging verbosity: `DEBUG`, `INFO`, `WARNING`, `ERROR`, or `CRITICAL`. |
 
 ### Restricting recipients (trusted recipients)
@@ -434,13 +436,40 @@ Each entry in an `attachments` list is either:
   path. The file must exist and be readable, or the tool errors out before
   anything is sent; or
 - an **RFC 2397 data URI** — `data:<MIME>;filename=<NAME>;base64,<DATA>`,
-  passed through to signal-cli unchanged.
+  passed through to signal-cli unchanged in **every** transfer mode.
 
-> **Remote daemon caveat:** file paths are resolved on the host where the
-> signal-cli daemon runs. When the daemon is remote (a different machine or a
-> container without a shared filesystem), local paths won't exist there — use
-> data URIs instead, which embed the file content and work regardless of where
-> the daemon lives.
+#### Transfer modes (path vs data URI)
+
+File paths only work when the signal-cli daemon shares a filesystem with this
+server — the daemon opens the path itself. When the daemon is remote (a
+different machine, or a container without a shared mount), local paths won't
+exist there, so the server can instead read the file itself and embed its
+content as an RFC 2397 data URI. `--attachment-transfer` /
+`SIGNAL_MCP_ATTACHMENT_TRANSFER` controls this:
+
+| Mode | Behavior |
+|------|----------|
+| `auto` *(default)* | `path` when `--rpc-host` is a loopback address (`127.0.0.0/8`, `::1`, or `localhost`); `data-uri` for any other host. |
+| `path` | Always pass validated absolute file paths to the daemon. |
+| `data-uri` | Always read local files and send them as `data:<mime>;filename=<name>;base64,<data>` — the MIME type is guessed from the file extension (`application/octet-stream` when unknown) and the original basename is preserved. |
+
+Caller-supplied `data:` URIs are never re-encoded or altered, regardless of
+mode.
+
+**Size cap:** encoding embeds the whole file in the JSON-RPC request, so
+data-URI transfer is capped at `--attachment-max-bytes` /
+`SIGNAL_MCP_ATTACHMENT_MAX_BYTES` (default `26214400` = 25 MB). A file over
+the cap fails with an actionable error *before* any RPC is issued. The cap
+only applies to data-URI encoding — `path` mode hands the daemon a path and
+never reads the file.
+
+**Remote daemon guidance:** if your daemon runs on another host (e.g.
+`--rpc-host signal.example.com`), the default `auto` mode already does the
+right thing and sends data URIs. Force `--attachment-transfer path` only when
+the remote daemon really does share the filesystem (e.g. a container with the
+same volume mounted at identical paths). If you routinely send files larger
+than 25 MB, raise `--attachment-max-bytes` — but note the whole payload is
+held in memory and shipped in a single JSON-RPC request.
 
 ### `send_reaction_to_user(emoji, user_id, target_author, target_timestamp, remove=False)`
 

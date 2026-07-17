@@ -1,8 +1,11 @@
 """FastMCP tool definitions and send helpers for the Signal MCP server."""
 
 import asyncio
+import base64
 import functools
+import ipaddress
 import logging
+import mimetypes
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any, ParamSpec, TypeVar
@@ -175,6 +178,80 @@ def _validate_attachments(attachments: list[str] | None) -> list[str] | None:
     return validated
 
 
+def _is_loopback_host(host: str) -> bool:
+    """True when ``host`` is a loopback address or the ``localhost`` hostname.
+
+    Covers 127.0.0.0/8, ``::1`` (including bracketed IPv6 literals), and the
+    ``localhost`` hostname (case-insensitive). Any other hostname or address
+    is treated as remote — resolving arbitrary hostnames to decide would add
+    DNS lookups to every send, so only the unambiguous forms count.
+    """
+    hostname = host.strip().strip("[]").lower()
+    if hostname == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(hostname).is_loopback
+    except ValueError:
+        return False
+
+
+def _resolve_transfer_mode() -> str:
+    """Resolve the configured attachment transfer mode to ``path``/``data-uri``.
+
+    ``auto`` becomes ``data-uri`` when the signal-cli daemon is remote (its
+    RPC host is not a loopback address), because local file paths would not
+    exist on the daemon's filesystem; against a local daemon it stays ``path``.
+    Explicit ``path``/``data-uri`` settings are returned as-is.
+    """
+    mode = config.attachment_transfer
+    if mode != "auto":
+        return mode
+    return "path" if _is_loopback_host(config.rpc_host) else "data-uri"
+
+
+def _encode_data_uri(path: Path) -> str:
+    """Encode a local file as an RFC 2397 data URI for the daemon.
+
+    Produces ``data:<mime>;filename=<basename>;base64,<data>`` — the MIME type
+    is guessed from the file extension (``application/octet-stream`` when
+    unknown) and the original basename is preserved in the ``filename``
+    parameter so the recipient sees a sensible name. Files larger than
+    ``config.attachment_max_bytes`` raise :class:`SignalError` before any
+    bytes are read.
+    """
+    size = path.stat().st_size
+    if size > config.attachment_max_bytes:
+        raise SignalError(
+            f"Attachment {path} is {size} bytes, which exceeds the "
+            f"{config.attachment_max_bytes}-byte limit for data-URI transfer "
+            "(raise it with --attachment-max-bytes / "
+            "SIGNAL_MCP_ATTACHMENT_MAX_BYTES)"
+        )
+    mime = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+    encoded = base64.b64encode(path.read_bytes()).decode("ascii")
+    return f"data:{mime};filename={path.name};base64,{encoded}"
+
+
+def _prepare_attachments(attachments: list[str] | None) -> list[str] | None:
+    """Validate outbound attachments and apply the configured transfer mode.
+
+    Runs :func:`_validate_attachments` first, then — when the transfer mode
+    resolves to ``data-uri`` — encodes each local file as an RFC 2397 data URI
+    (see :func:`_encode_data_uri`). Caller-supplied ``data:`` URIs pass
+    through unchanged in every mode. Raises :class:`SignalError` before any
+    RPC is issued when validation fails or a file exceeds the size cap.
+    Future transfer steps (e.g. URL downloads, #22) plug in here.
+    """
+    validated = _validate_attachments(attachments)
+    if not validated or _resolve_transfer_mode() != "data-uri":
+        return validated
+
+    return [
+        entry if entry.startswith("data:") else _encode_data_uri(Path(entry))
+        for entry in validated
+    ]
+
+
 async def _send_message(
     message: str,
     target: str,
@@ -183,8 +260,8 @@ async def _send_message(
 ) -> None:
     """Send a message to either a user or group via the daemon.
 
-    ``attachments`` entries must already be validated and resolved (see
-    :func:`_validate_attachments`); they are passed to the daemon as the
+    ``attachments`` entries must already be prepared (see
+    :func:`_prepare_attachments`); they are passed to the daemon as the
     ``"attachments"`` array. The message text may be empty when attachments
     are present. Raises :class:`SignalCLIError` on failure.
     """
@@ -240,13 +317,14 @@ async def send_message_to_user(
     """Send a message to a specific user using signal-cli.
 
     ``attachments`` is an optional list of file paths or RFC 2397 ``data:``
-    URIs (``data:<MIME>;filename=<NAME>;base64,<DATA>``). File paths are
-    resolved on the host where the signal-cli daemon runs. ``message`` may be
-    empty when attachments are provided.
+    URIs (``data:<MIME>;filename=<NAME>;base64,<DATA>``). File paths are read
+    on this server's host; when the daemon is remote they are embedded as
+    data URIs automatically. ``message`` may be empty when attachments are
+    provided.
     """
     logger.info(f"Tool called: send_message_to_user for user {user_id}")
     _ensure_trusted(user_id)
-    files = _validate_attachments(attachments)
+    files = _prepare_attachments(attachments)
     await _send_message(message, user_id, is_group=False, attachments=files)
     return {"message": "Message sent successfully"}
 
@@ -260,12 +338,13 @@ async def send_message_to_group(
 
     ``group_id`` may be the group's internal id (the ``group_id`` returned by
     receive_message) or its display name. ``attachments`` is an optional list
-    of file paths (resolved on the signal-cli daemon's host) or RFC 2397
-    ``data:`` URIs; ``message`` may be empty when attachments are provided.
+    of file paths (read on this server's host; embedded as data URIs when the
+    daemon is remote) or RFC 2397 ``data:`` URIs; ``message`` may be empty
+    when attachments are provided.
     """
     logger.info(f"Tool called: send_message_to_group for group {group_id}")
     gid = await _ensure_trusted_group(group_id)
-    files = _validate_attachments(attachments)
+    files = _prepare_attachments(attachments)
     await _send_message(message, gid, is_group=True, attachments=files)
     return {"message": "Message sent successfully"}
 
@@ -335,15 +414,16 @@ async def send(message: str, attachments: list[str] | None = None) -> dict[str, 
 
     Use this when the user asks to "send a message", "text me", or anything
     about sending to Signal. No phone number needed — it sends to the channel
-    owner's number. ``attachments`` is an optional list of file paths
-    (resolved on the signal-cli daemon's host) or RFC 2397 ``data:`` URIs;
-    ``message`` may be empty when attachments are provided.
+    owner's number. ``attachments`` is an optional list of file paths (read
+    on this server's host; embedded as data URIs when the daemon is remote)
+    or RFC 2397 ``data:`` URIs; ``message`` may be empty when attachments are
+    provided.
     """
     logger.info("Tool called: send")
     if not config.user_id:
         raise SignalError("No user_id configured (set --user-id)")
     _ensure_trusted(config.user_id)
-    files = _validate_attachments(attachments)
+    files = _prepare_attachments(attachments)
     await _send_message(message, config.user_id, is_group=False, attachments=files)
     return {"message": "Message sent successfully"}
 
