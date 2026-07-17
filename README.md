@@ -16,6 +16,7 @@ reactions — through a long-running `signal-cli daemon`.
 - [Running the server](#running-the-server)
   - [Configuration](#configuration)
   - [Restricting recipients](#restricting-recipients-trusted-recipients)
+  - [S3 attachment storage](#s3-compatible-attachment-storage-optional)
 - [Using with Claude](#using-with-claude-mcp-client-setup)
 - [Claude Channel mode](#claude-channel-mode)
   - [How it works](#how-channel-mode-works)
@@ -118,6 +119,7 @@ set. All variables use the `SIGNAL_MCP_` prefix to avoid collisions.
 | `--rpc-port` | `SIGNAL_MCP_RPC_PORT` | `7583` | Port of the signal-cli daemon JSON-RPC interface. |
 | `--trusted-recipient` | `SIGNAL_MCP_TRUSTED_RECIPIENTS` | *(none)* | Allowlist of recipients the server may message (comma-separated in the env var). See below. |
 | `--prompts-dir` | `SIGNAL_MCP_PROMPTS_DIR` | `~/.config/signal-mcp/prompts` | Directory of user-defined prompt template files (`*.md`). A missing directory just means no user prompts. See [User-defined prompts](#user-defined-prompts). |
+| `--attachments-dir` | `SIGNAL_MCP_ATTACHMENTS_DIR` | `~/.local/share/signal-cli/attachments` | Directory where signal-cli stores received attachment files. See [Inbound attachments](#inbound-attachments). |
 | `--log-level` | `SIGNAL_MCP_LOG_LEVEL` | `INFO` | Logging verbosity: `DEBUG`, `INFO`, `WARNING`, `ERROR`, or `CRITICAL`. |
 
 ### Restricting recipients (trusted recipients)
@@ -147,6 +149,57 @@ are configured, enforcement is disabled and every recipient is permitted.
 For groups, the allowlist entry may be either the group's internal id or its
 display name — the server resolves the group and accepts the send if *either*
 form is allowlisted, regardless of which form the caller passed.
+
+### S3-compatible attachment storage (optional)
+
+The server can stage attachments in an S3-compatible object store and hand out
+presigned URLs. S3 support ships as an optional extra:
+
+```bash
+uv pip install 'signal-mcp[s3]'   # or: pip install 'signal-mcp[s3]'
+```
+
+Setting a bucket enables S3 mode; without one the server runs exactly as
+before and boto3 does not need to be installed.
+
+| Flag | Env var | Default | Description |
+| --- | --- | --- | --- |
+| `--s3-bucket` | `SIGNAL_MCP_S3_BUCKET` | *(none)* | Bucket for attachments. Presence enables S3 mode. |
+| `--s3-endpoint-url` | `SIGNAL_MCP_S3_ENDPOINT_URL` | AWS default | Custom endpoint for Garage, MinIO, Cloudflare R2, or GCS interop. |
+| `--s3-region` | `SIGNAL_MCP_S3_REGION` | *(SDK default)* | Region name (some stores want a fixed value, e.g. `garage`). |
+| `--s3-prefix` | `SIGNAL_MCP_S3_PREFIX` | `signal-mcp/` | Key prefix for uploaded objects. |
+| `--s3-presign-ttl` | `SIGNAL_MCP_S3_PRESIGN_TTL` | `3600` | Presigned URL lifetime in seconds. |
+| `--s3-force-path-style` / `--no-s3-force-path-style` | `SIGNAL_MCP_S3_FORCE_PATH_STYLE` | on when an endpoint is set | Path-style addressing (`endpoint/bucket/key`). Garage and MinIO need it; AWS prefers virtual-hosted. |
+
+**Credentials** are resolved exclusively through the standard AWS chain —
+`AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` environment variables, shared
+config/credentials files (`~/.aws/…`, `AWS_PROFILE`), or instance roles. There
+are deliberately no credential flags, and secrets are never logged.
+
+At startup, when S3 mode is enabled the server issues a `HeadBucket` to verify
+the bucket is reachable and exits with an actionable error when it is not
+(bad endpoint, missing bucket, missing credentials, or a path-style mismatch).
+
+Works with AWS S3 out of the box; for other stores point the endpoint at the
+service:
+
+```bash
+# Garage / MinIO (self-hosted)
+uv run signal-mcp --user-id YOUR_PHONE_NUMBER \
+    --s3-bucket signal-attachments \
+    --s3-endpoint-url http://garage.internal:3900 \
+    --s3-region garage
+
+# Cloudflare R2
+SIGNAL_MCP_S3_BUCKET=signal-attachments \
+SIGNAL_MCP_S3_ENDPOINT_URL=https://ACCOUNT_ID.r2.cloudflarestorage.com \
+    uv run signal-mcp --user-id YOUR_PHONE_NUMBER
+
+# Google Cloud Storage (S3 interoperability mode + HMAC keys)
+SIGNAL_MCP_S3_BUCKET=signal-attachments \
+SIGNAL_MCP_S3_ENDPOINT_URL=https://storage.googleapis.com \
+    uv run signal-mcp --user-id YOUR_PHONE_NUMBER
+```
 
 ## Using with Claude (MCP client setup)
 
@@ -364,9 +417,9 @@ except `group_id` (id or display name) identifies the group.
 
 ### `receive_message(timeout=60)`
 
-Wait up to `timeout` seconds for the next actionable message (text body or
-emoji reaction) and return it. Messages that arrived while the daemon was
-streaming are queued, so back-to-back calls won't drop anything.
+Wait up to `timeout` seconds for the next actionable message (text body,
+attachments, or emoji reaction) and return it. Messages that arrived while the
+daemon was streaming are queued, so back-to-back calls won't drop anything.
 
 - `timeout` *(float, default `60`)* — seconds to wait.
 
@@ -381,7 +434,8 @@ can tell the two apart:
   "sender_name": "Alice Example", // sender's profile/contact name, if known
   "group_id": "GROUP_ID==",       // group id if it was a group message, else null
   "timestamp": 1744185565466,     // ms; pass back as target_timestamp to react
-  "reaction": null                // or a Reaction object (see below)
+  "reaction": null,               // or a Reaction object (see below)
+  "attachments": []               // Attachment objects (see below), if any
 }
 ```
 
@@ -403,6 +457,31 @@ When the message is a reaction, `reaction` holds:
 On timeout (or for non-actionable traffic like delivery/read receipts and
 typing indicators) an empty `MessageResponse` is returned — all fields `null`,
 which is **not** an error.
+
+#### Inbound attachments
+
+Messages carrying files (images, documents, voice notes, …) list them in
+`attachments`. An **attachment-only** message — e.g. a bare photo with no
+caption — still produces a result: `message` is `null` and `attachments` is
+populated. Each attachment looks like:
+
+```jsonc
+{
+  "id": "0oHirH8e8bm9oPM0NJ3B.png",    // signal-cli's stored file name
+  "content_type": "image/png",         // MIME type
+  "filename": "photo.png",             // sender's original name, may be null
+  "size": 12345,                       // bytes
+  "path": "/home/you/.local/share/signal-cli/attachments/0oHirH8e8bm9oPM0NJ3B.png"
+}
+```
+
+signal-cli (0.14.6+) downloads attachments into its attachments directory,
+storing each file under the attachment `id` (which includes the extension).
+The server resolves `path` against that directory — configurable with
+`--attachments-dir` / `SIGNAL_MCP_ATTACHMENTS_DIR` (default
+`~/.local/share/signal-cli/attachments`). When the file is not on disk (not
+yet downloaded, already cleaned up, or a non-default storage location),
+`path` is `null` but the metadata is still returned.
 
 ### `mark_read(sender, target_timestamp)`
 
