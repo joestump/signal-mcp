@@ -10,6 +10,7 @@ from mcp.server.fastmcp import FastMCP
 
 from signal_mcp.config import _normalize_recipient, config
 from signal_mcp.parse import MessageResponse
+from signal_mcp.prompts import register_prompts
 from signal_mcp.rpc import (
     SignalCLIError,
     SignalError,
@@ -21,6 +22,7 @@ logger = logging.getLogger(__name__)
 
 # The MCP server instance all tools register against.
 mcp = FastMCP(name="signal-cli")
+register_prompts(mcp)
 
 P = ParamSpec("P")
 T = TypeVar("T")

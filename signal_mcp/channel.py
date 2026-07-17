@@ -15,12 +15,14 @@ from mcp.server.stdio import stdio_server
 from mcp.types import JSONRPCMessage, JSONRPCNotification
 
 from signal_mcp.config import config
+from signal_mcp.prompts import SIGNAL_FORMATTING_RULES
 from signal_mcp.rpc import SignalCLIError, get_client
 from signal_mcp.tools import _send_receipt, mcp
 
 logger = logging.getLogger(__name__)
 
-CHANNEL_INSTRUCTIONS = """\
+CHANNEL_INSTRUCTIONS = (
+    """\
 This is a Signal messaging channel. The user can message you from their phone
 via Signal, and you can message them back.
 
@@ -29,7 +31,10 @@ sender_name="..." group="...">. The body text is the content.
 Use send_message_to_user with the sender attribute as user_id to reply.
 Use send to proactively message the user's phone (no phone number needed).
 Always reply to acknowledge inbound messages, even if briefly.
+
 """
+    + SIGNAL_FORMATTING_RULES
+)
 
 
 def _strip_prefix(text: str, prefix: str) -> str | None:
