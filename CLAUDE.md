@@ -3,12 +3,14 @@
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 ## Commands
-- Run: `python signal_mcp/main.py --user-id YOUR_PHONE_NUMBER [--transport {sse|stdio}]`
-- Run with channel mode: `python signal_mcp/main.py --user-id YOUR_PHONE_NUMBER --channel [--prefix PREFIX]`
-- Test: `uv run pytest tests/`
-- Lint: `ruff check .`
-- Type check: `mypy .`
-- Format code: `ruff format .`
+- Run: `uv run signal-mcp --operator OPERATOR_NUMBER [--account ACCOUNT_NUMBER] [--transport {sse|stdio}]`
+  - `--operator` = the human the agent serves (who it messages / listens to).
+  - `--account` = the number the MCP runs as (the daemon's `-a`); defaults to `--operator` (Note to Self).
+- Run with channel mode: `uv run signal-mcp --operator OPERATOR_NUMBER --channel [--prefix PREFIX]`
+- Test: `uv run --extra test pytest tests/`
+- Lint: `uv run ruff check .`
+- Type check: `uv run mypy .`
+- Format code: `uv run ruff format .`
 
 ## Code Style Guidelines
 - **Imports**: Standard library first, then third-party, then local. Group imports by type.

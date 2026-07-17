@@ -113,7 +113,7 @@ logger = logging.getLogger(__name__)
 def _log_startup(cfg: SignalConfig) -> None:
     """Log the effective configuration once logging is set up."""
     logger.info(
-        f"Starting Signal MCP server for user {cfg.user_id} "
+        f"Starting Signal MCP server as {cfg.account} serving operator {cfg.operator} "
         f"(transport={cfg.transport}, daemon {cfg.rpc_host}:{cfg.rpc_port}, "
         f"channel={cfg.channel_mode}, prefix={cfg.prefix!r})"
     )

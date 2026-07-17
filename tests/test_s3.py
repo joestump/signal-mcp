@@ -18,9 +18,9 @@ from signal_mcp import main as main_module
 from signal_mcp import s3
 from signal_mcp.config import config, parse_args
 
-USER = ["--user-id", "+15555550100"]
+USER = ["--operator", "+15555550100"]
 SIGNAL_MCP_ENV_VARS = (
-    "SIGNAL_MCP_USER_ID",
+    "SIGNAL_MCP_OPERATOR",
     "SIGNAL_MCP_TRANSPORT",
     "SIGNAL_MCP_RPC_HOST",
     "SIGNAL_MCP_RPC_PORT",

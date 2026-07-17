@@ -39,7 +39,7 @@ a scratch directory and then read the file. The URL is short-lived, so fetch
 it promptly. A line noting "file not available locally" means only the
 metadata is known.
 Use send_message_to_user with the sender attribute as user_id to reply.
-Use send to proactively message the user's phone (no phone number needed).
+Use send to proactively message the operator's phone (no phone number needed).
 Always reply to acknowledge inbound messages, even if briefly.
 
 """

@@ -26,7 +26,15 @@ DEFAULT_ATTACHMENT_MAX_BYTES = 26214400  # 25 MB
 class SignalConfig:
     """Configuration for the Signal MCP server."""
 
-    user_id: str = ""  # The user's Signal phone number (informational/logging)
+    # The human this agent serves — the default recipient of the `send`
+    # ("text me") tool and, in channel mode, the default trusted inbound
+    # sender. This is NOT the number the MCP runs as.
+    operator: str = ""
+    # The Signal number the MCP runs as (the signal-cli daemon's `-a` account;
+    # messages are sent FROM this number). Informational/logging today, and
+    # the identity the daemon must be bound to. Defaults to `operator` when unset,
+    # which is the single-number/Note-to-Self case (agent talks to itself).
+    account: str = ""
     transport: str = "sse"
     rpc_host: str = "127.0.0.1"
     rpc_port: int = 7583
@@ -36,7 +44,7 @@ class SignalConfig:
     trusted_recipients: frozenset[str] = field(default_factory=frozenset)
     # Allowlist of message authors (envelope ``source``) whose inbound
     # messages may reach the agent. When empty, channel mode denies everyone
-    # but ``user_id`` (deny-by-default), while polling stays ungated.
+    # but ``operator`` (deny-by-default), while polling stays ungated.
     trusted_senders: frozenset[str] = field(default_factory=frozenset)
     channel_mode: bool = False
     prefix: str = ""
@@ -127,7 +135,7 @@ def is_trusted_sender(sender: str | None) -> bool:
       The list is exhaustive: include your own number if you want your own
       messages (e.g. Note to Self) through.
     - When none are configured and channel mode is enabled, only the channel
-      owner (``user_id``) passes — inbound gating is deny-by-default in
+      operator (``operator``) passes — inbound gating is deny-by-default in
       channel mode.
     - Otherwise (polling mode with no allowlist) every author passes, so
       plain polling behavior is unchanged.
@@ -136,7 +144,7 @@ def is_trusted_sender(sender: str | None) -> bool:
     if config.trusted_senders:
         return normalized in config.trusted_senders
     if config.channel_mode:
-        return bool(normalized) and normalized == _normalize_recipient(config.user_id)
+        return bool(normalized) and normalized == _normalize_recipient(config.operator)
     return True
 
 
@@ -149,9 +157,20 @@ def parse_args(argv: list[str] | None = None) -> SignalConfig:
     """Parse CLI arguments and environment variables into the global config."""
     parser = argparse.ArgumentParser(description="Run the Signal MCP server")
     parser.add_argument(
-        "--user-id",
-        default=os.environ.get("SIGNAL_MCP_USER_ID"),
-        help="Signal phone number for the user (env: SIGNAL_MCP_USER_ID)",
+        "--operator",
+        default=os.environ.get("SIGNAL_MCP_OPERATOR"),
+        help="Signal phone number (E.164) of the human this agent serves — the "
+        "default recipient of the `send` tool and, in channel mode, the "
+        "default trusted inbound sender. This is who the agent talks TO, not "
+        "the number it runs as. Required. (env: SIGNAL_MCP_OPERATOR)",
+    )
+    parser.add_argument(
+        "--account",
+        default=os.environ.get("SIGNAL_MCP_ACCOUNT"),
+        help="Signal phone number (E.164) the MCP runs AS — the signal-cli "
+        "daemon's account, which messages are sent FROM. Defaults to --operator "
+        "(the single-number/Note-to-Self case). Set this when the agent has "
+        "its own number distinct from the operator. (env: SIGNAL_MCP_ACCOUNT)",
     )
     parser.add_argument(
         "--transport",
@@ -198,7 +217,7 @@ def parse_args(argv: list[str] | None = None) -> SignalConfig:
             "the agent. Repeat the flag to allow several. Values from the "
             "SIGNAL_MCP_TRUSTED_SENDERS env var (comma-separated) are added "
             "too. In channel mode, when no trusted senders are configured, "
-            "only messages from --user-id are forwarded (deny-by-default)."
+            "only messages from --operator are forwarded (deny-by-default)."
         ),
     )
     parser.add_argument(
@@ -319,10 +338,10 @@ def parse_args(argv: list[str] | None = None) -> SignalConfig:
 
     args = parser.parse_args(argv)
 
-    # --user-id is required, but may come from the environment instead of the
+    # --operator is required, but may come from the environment instead of the
     # flag, so validate after parsing rather than with argparse's required=True.
-    if not args.user_id:
-        parser.error("--user-id is required (or set SIGNAL_MCP_USER_ID)")
+    if not args.operator:
+        parser.error("--operator is required (or set SIGNAL_MCP_OPERATOR)")
     # choices isn't enforced for values coming from a default (i.e. the env var).
     if args.transport not in ("sse", "stdio"):
         parser.error(
@@ -352,7 +371,10 @@ def parse_args(argv: list[str] | None = None) -> SignalConfig:
             "(--attachment-max-bytes must be a positive integer)"
         )
 
-    config.user_id = args.user_id
+    config.operator = args.operator
+    # The MCP's own account defaults to the operator (single-number / Note-to-Self
+    # setups); set --account when the agent runs as a distinct number.
+    config.account = args.account or args.operator
     config.transport = args.transport
     config.rpc_host = args.rpc_host
     config.rpc_port = args.rpc_port

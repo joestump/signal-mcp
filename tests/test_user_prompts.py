@@ -195,15 +195,15 @@ def test_prompts_dir_flag_and_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("SIGNAL_MCP_PROMPTS_DIR", raising=False)
     monkeypatch.delenv("SIGNAL_MCP_TRANSPORT", raising=False)
     try:
-        parse_args(["--user-id", "+15550000000", "--prompts-dir", "~/my-prompts"])
+        parse_args(["--operator", "+15550000000", "--prompts-dir", "~/my-prompts"])
         assert config.prompts_dir == Path("~/my-prompts").expanduser()
 
         monkeypatch.setenv("SIGNAL_MCP_PROMPTS_DIR", "/tmp/env-prompts")
-        parse_args(["--user-id", "+15550000000"])
+        parse_args(["--operator", "+15550000000"])
         assert config.prompts_dir == Path("/tmp/env-prompts")
 
         monkeypatch.delenv("SIGNAL_MCP_PROMPTS_DIR")
-        parse_args(["--user-id", "+15550000000"])
+        parse_args(["--operator", "+15550000000"])
         assert config.prompts_dir == Path("~/.config/signal-mcp/prompts").expanduser()
     finally:
         for f in dataclasses.fields(config):

@@ -16,7 +16,7 @@ from signal_mcp.config import _load_trusted_senders, config, is_trusted_sender
 from signal_mcp.parse import MessageResponse
 from signal_mcp.tools import receive_message
 
-OWNER = "+15550001111"
+OPERATOR = "+15550001111"
 ALICE = "+15555550101"
 MALLORY = "+15555550199"
 GROUP = "GID=="
@@ -25,7 +25,7 @@ GROUP = "GID=="
 @pytest.fixture(autouse=True)
 def _reset_config(monkeypatch):
     """Give every test a known config baseline (restored afterwards)."""
-    monkeypatch.setattr(config, "user_id", OWNER)
+    monkeypatch.setattr(config, "operator", OPERATOR)
     monkeypatch.setattr(config, "prefix", "")
     monkeypatch.setattr(config, "channel_mode", False)
     monkeypatch.setattr(config, "trusted_senders", frozenset())
@@ -103,10 +103,10 @@ def test_helper_allows_everyone_when_unconfigured_polling():
     assert is_trusted_sender(None)
 
 
-def test_helper_channel_default_is_owner_only(monkeypatch):
-    """Channel mode with no allowlist is deny-by-default: only user_id passes."""
+def test_helper_channel_default_is_operator_only(monkeypatch):
+    """Channel mode with no allowlist is deny-by-default: only operator passes."""
     monkeypatch.setattr(config, "channel_mode", True)
-    assert is_trusted_sender(OWNER)
+    assert is_trusted_sender(OPERATOR)
     assert not is_trusted_sender(MALLORY)
     assert not is_trusted_sender(None)
     assert not is_trusted_sender("")
@@ -118,9 +118,9 @@ def test_helper_configured_list_is_exhaustive(monkeypatch):
     assert is_trusted_sender(ALICE)
     assert is_trusted_sender(f"  {ALICE} ")  # normalized like recipients
     assert not is_trusted_sender(MALLORY)
-    # Even the owner must be listed once an allowlist is configured.
+    # Even the operator must be listed once an allowlist is configured.
     monkeypatch.setattr(config, "channel_mode", True)
-    assert not is_trusted_sender(OWNER)
+    assert not is_trusted_sender(OPERATOR)
 
 
 def test_load_trusted_senders_merges_cli_and_env(monkeypatch):
@@ -178,20 +178,20 @@ def test_forwarder_gates_group_message_by_author(monkeypatch):
     assert receipts[0]["recipient"] == [ALICE]
 
 
-def test_channel_default_forwards_only_owner(monkeypatch):
-    """Channel mode + no allowlist: only envelope source == user_id forwards."""
+def test_channel_default_forwards_only_operator(monkeypatch):
+    """Channel mode + no allowlist: only envelope source == operator forwards."""
     monkeypatch.setattr(config, "channel_mode", True)
     sent, fake = _run_forwarder(
         [
-            _text_msg("note to self", sender=OWNER),
+            _text_msg("note to self", sender=OPERATOR),
             _text_msg("drive-by injection", sender=MALLORY),
         ]
     )
     assert len(sent) == 1
-    assert sent[0].root.params["meta"]["sender"] == OWNER
+    assert sent[0].root.params["meta"]["sender"] == OPERATOR
     receipts = _receipts(fake)
     assert len(receipts) == 1
-    assert receipts[0]["recipient"] == [OWNER]
+    assert receipts[0]["recipient"] == [OPERATOR]
 
 
 # --- polling (receive_message) ----------------------------------------------

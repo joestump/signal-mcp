@@ -69,7 +69,7 @@ Add to your `.mcp.json` or `~/.claude.json`:
     "signal": {
       "type": "stdio",
       "command": "uv",
-      "args": ["run", "--directory", "/path/to/signal-mcp", "python", "signal_mcp/main.py", "--user-id", "+15551234567", "--transport", "stdio"]
+      "args": ["run", "--directory", "/path/to/signal-mcp", "python", "signal_mcp/main.py", "--operator", "+15551234567", "--transport", "stdio"]
     }
   }
 }
@@ -78,7 +78,7 @@ Add to your `.mcp.json` or `~/.claude.json`:
 ### Standalone
 
 ```bash
-uv run signal_mcp/main.py --user-id YOUR_PHONE_NUMBER [--transport {sse|stdio}] \
+uv run signal_mcp/main.py --operator YOUR_PHONE_NUMBER [--transport {sse|stdio}] \
   [--rpc-host 127.0.0.1] [--rpc-port 7583]
 ```
 

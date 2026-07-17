@@ -611,21 +611,21 @@ async def send_reaction_to_group(
 @mcp.tool()
 @_log_tool_errors
 async def send(message: str, attachments: list[str] | None = None) -> dict[str, str]:
-    """Send a message to the channel owner's phone.
+    """Send a message to the channel operator's phone.
 
     Use this when the user asks to "send a message", "text me", or anything
     about sending to Signal. No phone number needed — it sends to the channel
-    owner's number. ``attachments`` is an optional list of file paths (read
+    operator's number. ``attachments`` is an optional list of file paths (read
     on this server's host; embedded as data URIs when the daemon is remote),
     ``http(s)`` URLs (downloaded by the server), or RFC 2397 ``data:`` URIs;
     ``message`` may be empty when attachments are provided.
     """
     logger.info("Tool called: send")
-    if not config.user_id:
-        raise SignalError("No user_id configured (set --user-id)")
-    _ensure_trusted(config.user_id)
+    if not config.operator:
+        raise SignalError("No operator configured (set --operator)")
+    _ensure_trusted(config.operator)
     async with _prepared_attachments(attachments) as files:
-        await _send_message(message, config.user_id, is_group=False, attachments=files)
+        await _send_message(message, config.operator, is_group=False, attachments=files)
     return {"message": "Message sent successfully"}
 
 
