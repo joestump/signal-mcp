@@ -491,7 +491,10 @@ Each entry in an `attachments` list is one of:
 > supplies, from the server's own network. Rely on the trusted-recipients /
 > trusted-senders posture to bound who can drive the model, and on network
 > policy (egress firewall, no link-local/metadata endpoints) to bound where the
-> server can reach. Only `http`/`https` schemes are allowed.
+> server can reach. Only `http`/`https` schemes are allowed, and redirects are
+> followed only to `http`/`https` targets (a redirect to any other scheme is
+> refused) — but a redirect to another **host** is still followed, so the
+> network-policy boundary is what ultimately contains SSRF.
 
 #### Transfer modes (path vs data URI)
 

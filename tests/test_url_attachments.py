@@ -11,13 +11,14 @@ import base64
 import glob
 import http.server
 import os
+import shutil
 import tempfile
 import threading
 from pathlib import Path
 
 import pytest
 
-from signal_mcp import rpc
+from signal_mcp import rpc, tools
 from signal_mcp.config import DEFAULT_ATTACHMENT_MAX_BYTES, config
 from signal_mcp.rpc import SignalError
 from signal_mcp.tools import (
@@ -246,6 +247,62 @@ def test_url_connection_refused_errors_before_rpc(fake):
         asyncio.run(send_message_to_user("hi", ALICE, ["http://127.0.0.1:9/none"]))
     assert fake.calls == []
     assert _leftover_temp_dirs() == []
+
+
+# ---------------------------------------------------------------------------
+# Redirects: followed only to http(s) targets
+# ---------------------------------------------------------------------------
+
+
+def test_url_redirect_to_http_is_followed(fake, http_server):
+    server, base = http_server
+    server.routes["/pic"] = (200, {"Content-Type": "image/png"}, PNG)
+    server.routes["/redir"] = (302, {"Location": f"{base}/pic"}, b"")
+
+    asyncio.run(send_message_to_user("look", ALICE, [f"{base}/redir"]))
+
+    assert fake.attachment_bytes == [PNG]
+    assert _leftover_temp_dirs() == []
+
+
+def test_url_redirect_to_non_http_scheme_rejected(fake, http_server):
+    """A redirect to a non-http(s) scheme (e.g. ftp) is refused, not followed."""
+    server, base = http_server
+    server.routes["/evil"] = (302, {"Location": "ftp://example.com/secret"}, b"")
+
+    with pytest.raises(SignalError, match="redirect"):
+        asyncio.run(send_message_to_user("hi", ALICE, [f"{base}/evil"]))
+
+    assert fake.calls == []
+    assert _leftover_temp_dirs() == []
+
+
+# ---------------------------------------------------------------------------
+# Cancellation-safe temp dir: registered for cleanup before the worker thread
+# ---------------------------------------------------------------------------
+
+
+def test_download_url_preregisters_temp_dir_before_thread(monkeypatch):
+    """The temp dir is created and registered for cleanup BEFORE the blocking
+    download runs, so a cancelled download cannot orphan an unregistered dir."""
+
+    async def scenario():
+        cleanup: list[Path] = []
+        captured: dict[str, Path] = {}
+
+        def fake_blocking(url, tmp_dir):
+            captured["dir"] = tmp_dir
+            assert tmp_dir in cleanup  # already registered before we run
+            return tmp_dir / "f.bin", "application/octet-stream"
+
+        monkeypatch.setattr(tools, "_download_url_blocking", fake_blocking)
+        path, _ = await tools._download_url("http://host/f", cleanup)
+        assert captured["dir"] in cleanup
+        assert path.parent == captured["dir"]
+        for tmp_dir in cleanup:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+
+    asyncio.run(scenario())
 
 
 # ---------------------------------------------------------------------------

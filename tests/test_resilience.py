@@ -133,7 +133,8 @@ def test_teardown_wakes_blocked_next_message_promptly(monkeypatch):
 
 
 def test_eof_disconnect_then_reconnect(monkeypatch):
-    """After the daemon drops (EOF), the next call reconnects and delivers."""
+    """After the daemon drops (EOF) with no blocked waiter, the next call
+    reconnects transparently and delivers — no spurious disconnect surfaces."""
     conns = _install_fake_connection(monkeypatch)
 
     async def scenario():
@@ -145,13 +146,12 @@ def test_eof_disconnect_then_reconnect(monkeypatch):
         msg = await asyncio.wait_for(client.next_message(timeout=1), timeout=1)
         assert msg is not None and msg.message == "first"
 
-        # Daemon closes the connection.
+        # Daemon closes the connection while nobody is blocked in next_message.
         reader0.feed(b"")
-        # A blocked caller wakes promptly and raises (not a silent timeout).
-        with pytest.raises(SignalDisconnectedError):
-            await asyncio.wait_for(client.next_message(timeout=3600), timeout=1)
+        await asyncio.sleep(0.02)  # let the reader hit EOF and tear down
 
-        # The next call transparently reconnects (a second stream pair opens).
+        # The next call reconnects (a second stream pair) and delivers. It does
+        # NOT raise: the reconnect succeeded, so the stale disconnect is drained.
         second = asyncio.create_task(client.next_message(timeout=1))
         await asyncio.sleep(0.01)
         assert len(conns) == 2
@@ -159,6 +159,33 @@ def test_eof_disconnect_then_reconnect(monkeypatch):
         reader1.feed(_receive_line("after-reconnect"))
         msg2 = await asyncio.wait_for(second, timeout=1)
         assert msg2 is not None and msg2.message == "after-reconnect"
+
+    asyncio.run(scenario())
+
+
+def test_stale_disconnect_sentinel_drained_after_queued_message(monkeypatch):
+    """A drop with a message queued ahead of the sentinel must not surface a
+    spurious disconnect after that message is delivered and we reconnect."""
+    conns = _install_fake_connection(monkeypatch)
+
+    async def scenario():
+        client = SignalRpcClient("daemon", 7583)
+        await client.connect()
+        reader0, _ = conns[0]
+
+        # A message arrives, then the daemon drops: the queue holds the message
+        # followed by the disconnect sentinel enqueued by teardown.
+        reader0.feed(_receive_line("queued"))
+        reader0.feed(b"")
+        await asyncio.sleep(0.02)
+
+        # First call reconnects, drains the stale sentinel, and returns the msg.
+        msg = await asyncio.wait_for(client.next_message(timeout=1), timeout=1)
+        assert msg is not None and msg.message == "queued"
+
+        # The follow-up call must idle out (None), NOT raise a stale disconnect.
+        result = await asyncio.wait_for(client.next_message(timeout=0.05), timeout=1)
+        assert result is None
 
     asyncio.run(scenario())
 

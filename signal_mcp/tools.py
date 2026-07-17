@@ -192,8 +192,8 @@ def _validate_attachments(attachments: list[str] | None) -> list[str] | None:
             continue
 
         if _URL_SCHEME_RE.match(entry):
-            scheme = entry.split("://", 1)[0].lower()
-            if scheme not in ("http", "https"):
+            if not _is_http_url(entry):
+                scheme = entry.split("://", 1)[0].lower()
                 raise SignalError(
                     f"Unsupported attachment URL scheme {scheme!r} in {entry!r}: "
                     "only http and https URLs are accepted"
@@ -316,18 +316,48 @@ def _resolve_download_name(headers: Any, url: str, content_type: str | None) -> 
     return name
 
 
-def _download_url_blocking(url: str, cleanup: list[Path]) -> tuple[Path, str | None]:
-    """Download ``url`` to a fresh temp dir; return ``(path, content_type)``.
+class _HTTPSchemeRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Follow redirects only to http(s) targets.
 
-    Streams the body with a running size check against
-    ``config.attachment_max_bytes`` and raises :class:`SignalError` on any
-    failure (bad status, timeout, oversize) so the tool errors before any RPC.
-    The temp directory is appended to ``cleanup`` as soon as it is created, so
-    the caller removes it even when the download fails partway.
+    urllib's default handler also permits ``ftp://`` redirect targets, which
+    would let a validated http(s) URL bounce to a scheme the allowlist rejects.
+    Enforcing the allowlist on every hop keeps the http(s)-only guarantee across
+    redirects. (The internal-host SSRF surface — a redirect to a private/
+    link-local http host — remains bounded by network policy; see the README.)
+    """
+
+    def redirect_request(
+        self,
+        req: urllib.request.Request,
+        fp: Any,
+        code: int,
+        msg: str,
+        headers: Any,
+        newurl: str,
+    ) -> urllib.request.Request | None:
+        if not _is_http_url(newurl):
+            raise SignalError(
+                f"Attachment URL redirected to a non-http(s) target: {newurl!r}"
+            )
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+_url_opener = urllib.request.build_opener(_HTTPSchemeRedirectHandler())
+
+
+def _download_url_blocking(url: str, tmp_dir: Path) -> tuple[Path, str | None]:
+    """Download ``url`` into ``tmp_dir``; return ``(path, content_type)``.
+
+    ``tmp_dir`` is created and registered for cleanup by :func:`_download_url`
+    *before* this runs in a worker thread, so a cancelled download can never
+    orphan an unregistered temp directory. Streams the body with a running size
+    check against ``config.attachment_max_bytes`` and raises :class:`SignalError`
+    on any failure (bad status, timeout, disallowed redirect, oversize) so the
+    tool errors before any RPC.
     """
     request = urllib.request.Request(url, headers={"User-Agent": "signal-mcp"})
     try:
-        response = urllib.request.urlopen(request, timeout=_URL_TIMEOUT)
+        response = _url_opener.open(request, timeout=_URL_TIMEOUT)
     except (urllib.error.URLError, OSError, ValueError) as e:
         raise SignalError(f"Failed to download attachment URL {url!r}: {e}") from e
 
@@ -335,8 +365,6 @@ def _download_url_blocking(url: str, cleanup: list[Path]) -> tuple[Path, str | N
         raw_type = response.headers.get("Content-Type")
         content_type = raw_type.split(";")[0].strip().lower() if raw_type else None
         name = _resolve_download_name(response.headers, url, content_type)
-        tmp_dir = Path(tempfile.mkdtemp(prefix="signal-mcp-att-"))
-        cleanup.append(tmp_dir)
         dest = tmp_dir / name
         total = 0
         try:
@@ -360,8 +388,17 @@ def _download_url_blocking(url: str, cleanup: list[Path]) -> tuple[Path, str | N
 
 
 async def _download_url(url: str, cleanup: list[Path]) -> tuple[Path, str | None]:
-    """Download ``url`` off the event loop (blocking urllib runs in a thread)."""
-    return await asyncio.to_thread(_download_url_blocking, url, cleanup)
+    """Download ``url`` off the event loop into a pre-registered temp dir.
+
+    The temp directory is created and appended to ``cleanup`` *before* the
+    blocking download is handed to a worker thread. asyncio cannot cancel the
+    thread itself, so if the awaiting coroutine is cancelled mid-download the
+    registered directory is still removed by :func:`_prepared_attachments`
+    (rather than leaking an unregistered dir the thread created).
+    """
+    tmp_dir = Path(tempfile.mkdtemp(prefix="signal-mcp-att-"))
+    cleanup.append(tmp_dir)
+    return await asyncio.to_thread(_download_url_blocking, url, tmp_dir)
 
 
 async def _prepare_attachments(

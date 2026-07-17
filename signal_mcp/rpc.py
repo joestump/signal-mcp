@@ -91,8 +91,32 @@ class SignalRpcClient:
                     f"({e}). Is the daemon running? "
                     f"(macOS: `signal-daemon status`)"
                 )
+            # A previous connection's teardown may have left disconnect
+            # sentinels in the queue. Drop them now that we have reconnected
+            # cleanly (a disconnect only matters when a caller is actively
+            # blocked or the reconnect itself fails); otherwise a stale sentinel
+            # would surface a spurious disconnect on the next next_message.
+            self._drain_disconnect_sentinels()
             self._reader_task = asyncio.create_task(self._read_loop())
             logger.info("Connected to signal-cli daemon")
+
+    def _drain_disconnect_sentinels(self) -> None:
+        """Remove any queued :data:`_DISCONNECT` sentinels, preserving messages.
+
+        Safe to call only when no reader task is producing (inside the connect
+        lock, after the old reader has torn down and before the new one starts),
+        so there is no concurrent enqueue to race.
+        """
+        kept: list[MessageResponse] = []
+        while True:
+            try:
+                item = self._messages.get_nowait()
+            except asyncio.QueueEmpty:
+                break
+            if not isinstance(item, _Disconnect):
+                kept.append(item)
+        for message in kept:
+            self._messages.put_nowait(message)
 
     async def _read_loop(self) -> None:
         assert self._reader is not None

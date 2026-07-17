@@ -33,13 +33,15 @@ class S3Error(Exception):
 
 
 # Bound every boto3 call so a hung or blackholed endpoint (accepts the TCP
-# connection but never responds) can't stall message flow for minutes. These
-# cap a single attempt; retries multiply them, so the attempt count is kept
-# low. store_inbound_attachments additionally wraps each attachment in an
-# overall wait_for as a hard ceiling on how long message flow can block.
-_CONNECT_TIMEOUT = 10  # seconds per connect attempt
-_READ_TIMEOUT = 30  # seconds per read
-_MAX_ATTEMPTS = 2  # total attempts (one retry)
+# connection but never responds) can't stall message flow for minutes. The
+# worst-case per-call budget is (connect + read) x attempts; it is kept *under*
+# _STORE_TIMEOUT so a stuck worker thread self-terminates around the same time
+# the wait_for ceiling fires (asyncio.wait_for bounds the await, but it cannot
+# cancel the boto3 call running in a thread — so the two must be aligned to
+# avoid stuck threads outliving the ceiling and exhausting the thread pool).
+_CONNECT_TIMEOUT = 5  # seconds per connect attempt
+_READ_TIMEOUT = 15  # seconds per read
+_MAX_ATTEMPTS = 1  # retries on top of the initial attempt (2 attempts total)
 _STORE_TIMEOUT = 45.0  # per-attachment hard ceiling on upload + presign
 
 
