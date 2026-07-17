@@ -461,7 +461,9 @@ data-URI transfer is capped at `--attachment-max-bytes` /
 `SIGNAL_MCP_ATTACHMENT_MAX_BYTES` (default `26214400` = 25 MB). A file over
 the cap fails with an actionable error *before* any RPC is issued. The cap
 only applies to data-URI encoding — `path` mode hands the daemon a path and
-never reads the file.
+never reads the file. Caller-supplied `data:` URIs bypass
+`--attachment-max-bytes` entirely, in every mode: they are forwarded as-is,
+whatever their size.
 
 **Remote daemon guidance:** if your daemon runs on another host (e.g.
 `--rpc-host signal.example.com`), the default `auto` mode already does the

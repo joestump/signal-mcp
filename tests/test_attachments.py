@@ -12,6 +12,9 @@ import asyncio
 import base64
 import dataclasses
 import os
+import re
+from pathlib import Path
+from urllib.parse import unquote
 
 import pytest
 
@@ -24,6 +27,7 @@ from signal_mcp.config import (
 )
 from signal_mcp.rpc import SignalError, UntrustedRecipientError
 from signal_mcp.tools import (
+    _encode_data_uri,
     _is_loopback_host,
     _resolve_transfer_mode,
     _validate_attachments,
@@ -410,6 +414,58 @@ def test_cap_not_enforced_in_path_mode(fake, monkeypatch, tmp_path):
     asyncio.run(send_message_to_user("hi", ALICE, [str(f)]))
 
     assert _send_params(fake)["attachments"] == [str(f.resolve())]
+
+
+def test_cap_rechecked_after_read(monkeypatch, tmp_path):
+    """A file that grows between stat and read still trips the cap (TOCTOU)."""
+    monkeypatch.setattr(config, "attachment_max_bytes", 10)
+    f = tmp_path / "grow.bin"
+    f.write_bytes(b"x" * 5)  # passes the stat-based check
+    monkeypatch.setattr(Path, "read_bytes", lambda self: b"x" * 11)
+
+    with pytest.raises(SignalError, match="11 bytes"):
+        _encode_data_uri(f)
+
+
+@pytest.mark.parametrize(
+    ("name", "mime"),
+    [
+        ("comma,name.txt", "text/plain"),
+        ("semi;colon.txt", "text/plain"),
+        ("Report, Final.pdf", "application/pdf"),
+        ("spa ce.txt", "text/plain"),
+        ("per%cent.txt", "text/plain"),
+        ('quo"te.txt', "text/plain"),
+        ("émoji café.png", "image/png"),
+    ],
+)
+def test_data_uri_hostile_basenames_round_trip(fake, monkeypatch, tmp_path, name, mime):
+    """Basenames with ',', ';', spaces, '%', quotes, or non-ASCII stay intact.
+
+    A raw ',' or ';' in the filename parameter would corrupt the URI — RFC
+    2397 defines the payload as everything after the *first* comma — so the
+    URI is parsed structurally: split at the first comma, then verify each
+    header parameter and that the basename percent-decodes back exactly.
+    """
+    monkeypatch.setattr(config, "attachment_transfer", "data-uri")
+    payload = b"\x00hostile\xffbytes"
+    f = tmp_path / name
+    f.write_bytes(payload)
+
+    asyncio.run(send_message_to_user("f", ALICE, [str(f)]))
+
+    (uri,) = _send_params(fake)["attachments"]
+    header, b64data = uri.split(",", 1)
+    assert base64.b64decode(b64data, validate=True) == payload
+
+    mime_part, filename_param, base64_marker = header.split(";")
+    assert mime_part == f"data:{mime}"
+    assert base64_marker == "base64"
+    assert filename_param.startswith("filename=")
+    encoded_name = filename_param.removeprefix("filename=")
+    # Fully percent-encoded: only unreserved characters and % escapes remain.
+    assert re.fullmatch(r"[A-Za-z0-9._~%-]+", encoded_name)
+    assert unquote(encoded_name) == name
 
 
 # ---------------------------------------------------------------------------

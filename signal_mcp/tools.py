@@ -9,6 +9,7 @@ import mimetypes
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any, ParamSpec, TypeVar
+from urllib.parse import quote
 
 from mcp.server.fastmcp import FastMCP
 
@@ -215,21 +216,30 @@ def _encode_data_uri(path: Path) -> str:
     Produces ``data:<mime>;filename=<basename>;base64,<data>`` — the MIME type
     is guessed from the file extension (``application/octet-stream`` when
     unknown) and the original basename is preserved in the ``filename``
-    parameter so the recipient sees a sensible name. Files larger than
-    ``config.attachment_max_bytes`` raise :class:`SignalError` before any
-    bytes are read.
+    parameter so the recipient sees a sensible name. The basename is
+    percent-encoded (RFC 2397/3986): a raw ``,`` or ``;`` in a filename would
+    otherwise corrupt the URI structure, since everything after the *first*
+    comma is the payload. Files larger than ``config.attachment_max_bytes``
+    raise :class:`SignalError` before any bytes are read; the size is
+    re-checked after reading in case the file grew in between.
     """
-    size = path.stat().st_size
-    if size > config.attachment_max_bytes:
-        raise SignalError(
-            f"Attachment {path} is {size} bytes, which exceeds the "
-            f"{config.attachment_max_bytes}-byte limit for data-URI transfer "
-            "(raise it with --attachment-max-bytes / "
-            "SIGNAL_MCP_ATTACHMENT_MAX_BYTES)"
-        )
+
+    def _check_cap(size: int) -> None:
+        if size > config.attachment_max_bytes:
+            raise SignalError(
+                f"Attachment {path} is {size} bytes, which exceeds the "
+                f"{config.attachment_max_bytes}-byte limit for data-URI "
+                "transfer (raise it with --attachment-max-bytes / "
+                "SIGNAL_MCP_ATTACHMENT_MAX_BYTES)"
+            )
+
+    _check_cap(path.stat().st_size)
+    data = path.read_bytes()
+    _check_cap(len(data))
     mime = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
-    encoded = base64.b64encode(path.read_bytes()).decode("ascii")
-    return f"data:{mime};filename={path.name};base64,{encoded}"
+    encoded = base64.b64encode(data).decode("ascii")
+    filename = quote(path.name, safe="")
+    return f"data:{mime};filename={filename};base64,{encoded}"
 
 
 def _prepare_attachments(attachments: list[str] | None) -> list[str] | None:
