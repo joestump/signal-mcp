@@ -336,6 +336,13 @@ moment it arrives.
 - A background task listens on the signal-cli daemon and forwards each text
   message as a `notifications/claude/channel` notification. Reactions are not
   forwarded.
+- Messages carrying attachments are forwarded too — including
+  **attachment-only** messages (e.g. a bare photo with no caption). Each
+  attachment appends one line to the notification body:
+  `[attachment: /path/to/file (image/png, 245 KB)]`. The local path is
+  included only when the file exists on disk; otherwise the line carries the
+  original filename (or attachment id) and a "file not available locally"
+  note. Claude opens the paths with its Read tool.
 - Claude receives messages wrapped as `<channel source="signal"
   sender="..." sender_name="..." group="...">`, and can reply with the
   `send` tool (no recipient needed — it always messages the channel owner's
@@ -361,6 +368,11 @@ leading whitespace, case-insensitive) are forwarded to Claude. The prefix must
 end on a word boundary — prefix `cc` matches `cc deploy` but not `ccdeploy`.
 The prefix is stripped from the message before delivery. Messages that don't
 match are dropped silently.
+
+The prefix applies to the message **text** only. An attachment-only message
+has no text to match, so when a prefix is configured attachment-only messages
+are dropped (fail closed) — send the file with a caption that starts with the
+prefix to forward it.
 
 This is useful when the signal-cli daemon receives messages from multiple
 sources and you only want Claude to see a subset — for example, only messages
