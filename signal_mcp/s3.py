@@ -14,9 +14,11 @@ secrets.
 
 import asyncio
 import logging
+from datetime import datetime, timezone
 from typing import Any
 
 from signal_mcp.config import config
+from signal_mcp.parse import MessageResponse
 
 logger = logging.getLogger(__name__)
 
@@ -119,6 +121,51 @@ async def presign(key: str, ttl: int | None = None) -> str:
         ExpiresIn=expires,
     )
     return url
+
+
+def _inbound_key(message_timestamp: int | None, attachment_id: str) -> str:
+    """Deterministic object key (relative to ``--s3-prefix``) for an attachment.
+
+    Layout: ``{YYYY}/{MM}/{message-timestamp}-{attachment-id}``. The date
+    partition is derived from the message timestamp (milliseconds since the
+    epoch, in UTC); a missing timestamp falls back to ``0`` (``1970/01``) so the
+    key is always deterministic. Deterministic keys make a re-received
+    attachment an idempotent overwrite — no dedupe bookkeeping needed.
+    """
+    ts = int(message_timestamp or 0)
+    when = datetime.fromtimestamp(ts / 1000, tz=timezone.utc)
+    return f"{when:%Y}/{when:%m}/{ts}-{attachment_id}"
+
+
+async def store_inbound_attachments(msg: MessageResponse) -> None:
+    """Upload a received message's attachments to S3 and set each ``url``.
+
+    Best-effort and failure-isolated: when S3 mode is disabled, an attachment
+    has no resolved local file, or an upload/presign fails, that attachment's
+    ``url`` is left ``None`` and delivery proceeds on the local path. An S3
+    problem MUST NOT block message flow, so every failure is caught and logged.
+    Uploads and presigning run in a thread executor (see :func:`upload_file`
+    and :func:`presign`), so they never block the event loop.
+    """
+    if not is_enabled():
+        return
+    for att in msg.attachments:
+        # Only files that actually resolved on disk can be uploaded; a missing
+        # local file keeps its metadata and falls back to the no-path form.
+        if not att.path or not att.id:
+            continue
+        try:
+            key = _inbound_key(msg.timestamp, att.id)
+            await upload_file(
+                att.path, key, att.content_type or "application/octet-stream"
+            )
+            att.url = await presign(key)
+            logger.info(f"Uploaded inbound attachment {att.id!r} to S3")
+        except Exception as e:  # noqa: BLE001 — S3 must never block message flow
+            logger.warning(
+                f"S3 upload failed for inbound attachment {att.id!r}; "
+                f"falling back to local path ({e})"
+            )
 
 
 async def validate() -> None:

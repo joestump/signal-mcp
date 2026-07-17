@@ -29,7 +29,9 @@ class Attachment:
     the sender's original file name, which may be ``None``. ``path`` is the
     absolute local path to the file inside the configured attachments
     directory, or ``None`` when the file does not exist on disk (the metadata
-    is kept either way).
+    is kept either way). ``url`` is a presigned GET URL for the file once it
+    has been uploaded to S3-compatible storage (see :mod:`signal_mcp.s3`), or
+    ``None`` when S3 mode is disabled or the upload failed.
     """
 
     id: str | None = None
@@ -37,6 +39,7 @@ class Attachment:
     filename: str | None = None
     size: int | None = None
     path: str | None = None
+    url: str | None = None
 
 
 @dataclass

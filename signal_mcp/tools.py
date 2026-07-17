@@ -13,6 +13,7 @@ from urllib.parse import quote
 
 from mcp.server.fastmcp import FastMCP
 
+from signal_mcp import s3
 from signal_mcp.config import _normalize_recipient, config, is_trusted_sender
 from signal_mcp.parse import MessageResponse
 from signal_mcp.prompts import register_prompts
@@ -451,10 +452,12 @@ async def receive_message(timeout: float = 60.0) -> MessageResponse:
 
     File attachments are listed in ``attachments``: each entry carries the
     signal-cli attachment ``id``, ``content_type``, the sender's original
-    ``filename`` (may be null), ``size`` in bytes, and ``path`` — the absolute
+    ``filename`` (may be null), ``size`` in bytes, ``path`` — the absolute
     local path to the downloaded file, or null when the file is not present
-    in the configured attachments directory. An attachment-only message (e.g.
-    a bare image) has ``message`` null but ``attachments`` populated.
+    in the configured attachments directory — and ``url``, a short-lived
+    presigned GET URL when S3 storage is enabled (else null; download it and
+    read the file). An attachment-only message (e.g. a bare image) has
+    ``message`` null but ``attachments`` populated.
 
     When a trusted-senders allowlist is configured, messages from other
     authors are skipped (with a log line) and the call keeps waiting within
@@ -487,6 +490,9 @@ async def receive_message(timeout: float = 60.0) -> MessageResponse:
             f"Received message from {result.sender_id}"
             + (f" in group {result.group_id}" if result.group_id else "")
         )
+        # Upload attachments to S3 (best-effort) so the result carries presigned
+        # URLs; a failure leaves url=None and the local path is used instead.
+        await s3.store_inbound_attachments(result)
         return result
 
 

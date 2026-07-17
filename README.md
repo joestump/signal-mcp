@@ -228,6 +228,27 @@ At startup, when S3 mode is enabled the server issues a `HeadBucket` to verify
 the bucket is reachable and exits with an actionable error when it is not
 (bad endpoint, missing bucket, missing credentials, or a path-style mismatch).
 
+**How inbound attachments flow.** With S3 mode on, each attachment on a received
+message is uploaded to the bucket as it arrives — under a deterministic key
+`{prefix}{YYYY}/{MM}/{message-timestamp}-{attachment-id}`, so a re-received file
+is an idempotent overwrite — and the message delivered to the agent (a
+`receive_message` result or a channel notification) carries a **presigned GET
+URL** instead of a local path. Upload and presign run off the event loop and are
+**failure-isolated**: if S3 is unreachable the message is still delivered with
+its local path, never dropped.
+
+**Why (decoupling).** Presigned URLs keep binary data out of the agent's context
+— it only ever sees a short-lived link — and free the MCP server from needing a
+shared filesystem with the harness. The server (and daemon) can run on a
+different host, e.g. over SSE, and attachments still work: the agent fetches
+them from object storage rather than reading the MCP host's disk. The outbound
+counterpart — [URL attachments](#attachments) — closes the loop, letting a
+remote harness send files it could never place on the MCP host.
+
+**Security.** A presigned URL is a bearer credential: anyone who obtains it can
+fetch the object until it expires. Keep `--s3-presign-ttl` short, use a private
+bucket, and treat the URLs as secrets in logs and transcripts.
+
 Works with AWS S3 out of the box; for other stores point the endpoint at the
 service:
 
@@ -342,7 +363,13 @@ moment it arrives.
   `[attachment: /path/to/file (image/png, 245 KB)]`. The local path is
   included only when the file exists on disk; otherwise the line carries the
   original filename (or attachment id) and a "file not available locally"
-  note. Claude opens the paths with its Read tool.
+  note. Claude opens the paths with its Read tool. When
+  [S3 storage](#s3-compatible-attachment-storage-optional) is enabled the line
+  instead carries a presigned URL — `[attachment: https://… (image/png, 245
+  KB)]` — which Claude downloads to a scratch dir before reading.
+- The forwarder is resilient to daemon outages: if the signal-cli daemon is
+  down at startup or restarts mid-session, it retries with backoff and
+  reconnects instead of going silent for the life of the server.
 - Claude receives messages wrapped as `<channel source="signal"
   sender="..." sender_name="..." group="...">`, and can reply with the
   `send` tool (no recipient needed — it always messages the channel owner's
@@ -550,6 +577,12 @@ On timeout (or for non-actionable traffic like delivery/read receipts and
 typing indicators) an empty `MessageResponse` is returned — all fields `null`,
 which is **not** an error.
 
+> **Not available in channel mode.** The background forwarder is the single
+> consumer of the daemon's receive queue, so calling `receive_message` in
+> channel mode would race it and silently steal messages. In channel mode the
+> tool raises instead — messages are pushed to you as
+> `notifications/claude/channel` automatically.
+
 #### Inbound attachments
 
 Messages carrying files (images, documents, voice notes, …) list them in
@@ -563,7 +596,8 @@ populated. Each attachment looks like:
   "content_type": "image/png",         // MIME type
   "filename": "photo.png",             // sender's original name, may be null
   "size": 12345,                       // bytes
-  "path": "/home/you/.local/share/signal-cli/attachments/0oHirH8e8bm9oPM0NJ3B.png"
+  "path": "/home/you/.local/share/signal-cli/attachments/0oHirH8e8bm9oPM0NJ3B.png",
+  "url": null                          // presigned GET URL when S3 is on, else null
 }
 ```
 
@@ -574,6 +608,13 @@ The server resolves `path` against that directory — configurable with
 `~/.local/share/signal-cli/attachments`). When the file is not on disk (not
 yet downloaded, already cleaned up, or a non-default storage location),
 `path` is `null` but the metadata is still returned.
+
+When [S3 storage](#s3-compatible-attachment-storage-optional) is enabled the
+server uploads the file and sets `url` to a short-lived presigned GET URL;
+download it and read the bytes rather than relying on `path` (which points at
+the MCP host's disk and may not be reachable from a remote harness). If the
+upload fails, `url` stays `null` and `path` is used — the message is never
+dropped over an S3 problem.
 
 ### `mark_read(sender, target_timestamp)`
 
