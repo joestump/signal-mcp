@@ -19,6 +19,7 @@ from signal_mcp.parse import MessageResponse
 from signal_mcp.prompts import register_prompts
 from signal_mcp.rpc import (
     SignalCLIError,
+    SignalDisconnectedError,
     SignalError,
     UntrustedRecipientError,
     get_client,
@@ -479,7 +480,15 @@ async def receive_message(timeout: float = 60.0) -> MessageResponse:
     deadline = loop.time() + timeout
     while True:
         remaining = deadline - loop.time()
-        result = await get_client().next_message(remaining) if remaining > 0 else None
+        try:
+            result = (
+                await get_client().next_message(remaining) if remaining > 0 else None
+            )
+        except SignalDisconnectedError:
+            # A drop mid-wait is not an error for a poller — surface it as an
+            # empty result (same as a timeout); the next call reconnects.
+            logger.info("receive_message: daemon connection dropped mid-wait")
+            return MessageResponse()
         if result is None:
             logger.info("No message received within timeout")
             return MessageResponse()

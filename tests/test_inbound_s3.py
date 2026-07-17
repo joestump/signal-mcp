@@ -173,6 +173,36 @@ def test_store_failure_falls_back_to_local_path(monkeypatch, tmp_path):
     assert _attachment_line(att) == f"[attachment: {src} (image/png, 245 KB)]"
 
 
+def test_store_times_out_and_falls_back(monkeypatch):
+    """A hung upload is bounded by _STORE_TIMEOUT — it never stalls the caller."""
+    monkeypatch.setattr(config, "s3_bucket", "attachments")
+    monkeypatch.setattr(s3, "_STORE_TIMEOUT", 0.05)
+
+    async def hang(*args, **kwargs):
+        await asyncio.sleep(3600)
+
+    monkeypatch.setattr(s3, "upload_file", hang)
+
+    att = _attachment()
+    msg = MessageResponse(sender_id="+1", timestamp=TS, attachments=[att])
+
+    # Returns promptly (well under the hung 3600s) and leaves url unset.
+    asyncio.run(s3.store_inbound_attachments(msg))
+
+    assert att.url is None
+
+
+def test_get_client_sets_bounded_timeouts(monkeypatch):
+    """The boto3 client caps connect/read time and retries (no minutes-long hang)."""
+    monkeypatch.setattr(config, "s3_bucket", "attachments")
+    client = s3.get_client()
+    assert client.meta.config.connect_timeout == s3._CONNECT_TIMEOUT
+    assert client.meta.config.read_timeout == s3._READ_TIMEOUT
+    assert client.meta.config.retries["mode"] == "standard"
+    # botocore resolves max_attempts (retries) to total_max_attempts = N + 1.
+    assert client.meta.config.retries["total_max_attempts"] == s3._MAX_ATTEMPTS + 1
+
+
 def test_store_disabled_is_noop(monkeypatch):
     monkeypatch.setattr(config, "s3_bucket", "")
     att = _attachment()

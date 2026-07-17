@@ -24,7 +24,12 @@ from signal_mcp import channel, rpc
 from signal_mcp.channel import _forward_channel_messages
 from signal_mcp.config import config
 from signal_mcp.parse import MessageResponse
-from signal_mcp.rpc import SignalCLIError, SignalError, SignalRpcClient
+from signal_mcp.rpc import (
+    SignalCLIError,
+    SignalDisconnectedError,
+    SignalError,
+    SignalRpcClient,
+)
 from signal_mcp.tools import receive_message
 
 
@@ -106,7 +111,7 @@ def _receive_line(text: str, sender: str = "+15551234567", ts: int = 5) -> bytes
 
 
 def test_teardown_wakes_blocked_next_message_promptly(monkeypatch):
-    """A disconnect wakes a caller blocked on a long timeout, returning None."""
+    """A disconnect wakes a caller blocked on a long timeout, raising promptly."""
     _install_fake_connection(monkeypatch)
 
     async def scenario():
@@ -120,8 +125,9 @@ def test_teardown_wakes_blocked_next_message_promptly(monkeypatch):
 
         client._teardown(SignalCLIError("daemon connection closed"))
 
-        result = await asyncio.wait_for(waiter, timeout=1)
-        assert result is None
+        # A drop is distinguishable from a quiet idle period: it raises.
+        with pytest.raises(SignalDisconnectedError):
+            await asyncio.wait_for(waiter, timeout=1)
 
     asyncio.run(scenario())
 
@@ -141,10 +147,9 @@ def test_eof_disconnect_then_reconnect(monkeypatch):
 
         # Daemon closes the connection.
         reader0.feed(b"")
-        # A blocked caller wakes promptly via the disconnect sentinel.
-        assert (
-            await asyncio.wait_for(client.next_message(timeout=3600), timeout=1) is None
-        )
+        # A blocked caller wakes promptly and raises (not a silent timeout).
+        with pytest.raises(SignalDisconnectedError):
+            await asyncio.wait_for(client.next_message(timeout=3600), timeout=1)
 
         # The next call transparently reconnects (a second stream pair opens).
         second = asyncio.create_task(client.next_message(timeout=1))
@@ -289,6 +294,83 @@ def test_forwarder_retries_until_daemon_available(monkeypatch):
     assert flaky._remaining == 0  # all failures were retried
     assert len(stream.sent) == 1
     assert stream.sent[0].root.params["content"] == "finally"
+
+
+class DisconnectingClient:
+    """next_message raises SignalDisconnectedError ``drops`` times, then delivers
+    one message, then blocks forever (independent of asyncio.sleep patching)."""
+
+    def __init__(self, drops: int, message: MessageResponse) -> None:
+        self._drops = drops
+        self._message = message
+        self._delivered = False
+        self._idle = asyncio.Event()
+        self.attempts = 0
+        self.calls: list[tuple[str, dict]] = []
+
+    async def call(self, method, params=None, timeout=30.0):
+        self.calls.append((method, params or {}))
+        return {"timestamp": 1}
+
+    async def next_message(self, timeout: float):
+        self.attempts += 1
+        if self._drops > 0:
+            self._drops -= 1
+            raise SignalDisconnectedError("daemon dropped mid-wait")
+        if not self._delivered:
+            self._delivered = True
+            return self._message
+        await self._idle.wait()  # block until cancelled
+
+
+def test_forwarder_backs_off_on_repeated_disconnects_no_hot_spin(monkeypatch):
+    """A flapping daemon (repeated drops) makes the forwarder back off — with
+    growth and a cap — instead of hot-looping through instant reconnects."""
+    monkeypatch.setattr(channel, "_INITIAL_BACKOFF", 1.0)
+    monkeypatch.setattr(channel, "_MAX_BACKOFF", 4.0)
+    monkeypatch.setattr(config, "prefix", "")
+
+    sleeps: list[float] = []
+    real_sleep = asyncio.sleep
+
+    async def recording_sleep(delay, *args, **kwargs):
+        sleeps.append(delay)
+        await real_sleep(0)  # yield, but don't actually wait
+
+    # channel imports asyncio as a module, so this records the forwarder's sleeps.
+    monkeypatch.setattr(channel.asyncio, "sleep", recording_sleep)
+
+    message = MessageResponse(message="up", sender_id="+15551234567", timestamp=1)
+    client = DisconnectingClient(drops=4, message=message)
+
+    class Stream:
+        def __init__(self):
+            self.sent = []
+
+        async def send(self, msg):
+            self.sent.append(msg)
+
+    stream = Stream()
+
+    async def scenario():
+        monkeypatch.setattr(rpc, "client", client)
+        task = asyncio.create_task(_forward_channel_messages(stream))
+        for _ in range(1000):
+            if stream.sent:
+                break
+            await real_sleep(0)
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+    asyncio.run(scenario())
+
+    # Each disconnect sleeps before retrying (no hot spin), doubling 1→2→4 and
+    # then saturating at the 4s cap — never reset between consecutive drops.
+    assert sleeps[:4] == [1.0, 2.0, 4.0, 4.0]
+    assert len(stream.sent) == 1
 
 
 # ---------------------------------------------------------------------------

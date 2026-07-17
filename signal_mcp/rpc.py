@@ -20,6 +20,15 @@ class SignalCLIError(SignalError):
     """Exception raised when a signal-cli JSON-RPC call fails."""
 
 
+class SignalDisconnectedError(SignalCLIError):
+    """Raised by :meth:`SignalRpcClient.next_message` when the connection drops.
+
+    Distinct from a healthy idle timeout (which returns ``None``): a disconnect
+    is an error condition that callers should back off on before reconnecting.
+    A caller that merely wants to keep polling can treat it like a timeout.
+    """
+
+
 class UntrustedRecipientError(SignalError):
     """Raised when a send is attempted to a recipient not on the allowlist."""
 
@@ -29,8 +38,8 @@ class _Disconnect:
 
     When the connection drops, a blocked ``next_message`` caller must wake
     promptly instead of waiting out its (possibly hour-long) receive timeout.
-    Teardown enqueues this sentinel; the waiter treats it like a timeout
-    (returns ``None``) and the next call reconnects.
+    Teardown enqueues this sentinel; the waiter turns it into a
+    :class:`SignalDisconnectedError` and the next call reconnects.
     """
 
 
@@ -199,10 +208,12 @@ class SignalRpcClient:
     async def next_message(self, timeout: float) -> MessageResponse | None:
         """Wait up to ``timeout`` seconds for the next actionable message.
 
-        Returns ``None`` on timeout *or* when the connection drops mid-wait (a
-        :data:`_DISCONNECT` sentinel is enqueued by teardown). Either way the
-        caller should loop and call again; the next call transparently
-        reconnects.
+        Returns ``None`` on a genuine idle timeout. Raises
+        :class:`SignalDisconnectedError` when the connection drops mid-wait (a
+        :data:`_DISCONNECT` sentinel is enqueued by teardown) — distinguishing
+        a healthy quiet period from a dropped connection so callers can back off
+        on the latter instead of hot-looping through instant reconnects. The
+        next call transparently reconnects.
         """
         await self._ensure_connected()
         try:
@@ -210,7 +221,7 @@ class SignalRpcClient:
         except asyncio.TimeoutError:
             return None
         if isinstance(item, _Disconnect):
-            return None
+            raise SignalDisconnectedError("signal-cli daemon connection dropped")
         return item
 
 
