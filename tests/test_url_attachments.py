@@ -94,7 +94,7 @@ def fake(monkeypatch):
     client = RecordingClient()
     monkeypatch.setattr(rpc, "client", client)
     monkeypatch.setattr(config, "trusted_recipients", frozenset())
-    monkeypatch.setattr(config, "user_id", ALICE)
+    monkeypatch.setattr(config, "operator", ALICE)
     monkeypatch.setattr(config, "attachment_transfer", "path")
     monkeypatch.setattr(config, "attachment_max_bytes", DEFAULT_ATTACHMENT_MAX_BYTES)
     monkeypatch.setattr(config, "rpc_host", "127.0.0.1")
