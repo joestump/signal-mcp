@@ -55,6 +55,7 @@ from signal_mcp.config import (
     configure_logging,
     parse_args,
 )
+from signal_mcp import s3
 from signal_mcp.parse import MessageResponse, Reaction, _envelope_to_response
 from signal_mcp.rpc import (
     SignalCLIError,
@@ -122,6 +123,30 @@ def _log_startup(cfg: SignalConfig) -> None:
         logger.warning(
             "No trusted recipients configured; the server may message any recipient"
         )
+    if cfg.s3_bucket:
+        logger.info(
+            f"S3 storage enabled: bucket {cfg.s3_bucket!r}, "
+            f"endpoint {cfg.s3_endpoint_url or 'AWS default'}, "
+            f"prefix {cfg.s3_prefix!r}, presign TTL {cfg.s3_presign_ttl}s, "
+            f"path-style {'on' if cfg.s3_force_path_style else 'off'}"
+        )
+
+
+def _validate_s3(cfg: SignalConfig) -> None:
+    """Fail fast at startup when S3 mode is enabled but unusable.
+
+    Runs a ``HeadBucket`` against the configured bucket. On failure (boto3 not
+    installed, bad endpoint/bucket, missing credentials, path-style mismatch)
+    the process exits with an actionable error instead of failing later on the
+    first upload. A no-op when S3 mode is not enabled.
+    """
+    if not cfg.s3_bucket:
+        return
+    try:
+        anyio.run(s3.validate)
+    except s3.S3Error as e:
+        logger.error(f"S3 storage unavailable: {e}")
+        sys.exit(1)
 
 
 def main() -> None:
@@ -129,6 +154,7 @@ def main() -> None:
     cfg = parse_args()
     configure_logging(cfg.log_level)
     _log_startup(cfg)
+    _validate_s3(cfg)
     try:
         if cfg.channel_mode:
             mcp._mcp_server.instructions = CHANNEL_INSTRUCTIONS

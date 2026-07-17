@@ -19,9 +19,14 @@ build-backend = "hatchling.build"
 signal-mcp = "signal_mcp.main:main"
 
 [project.optional-dependencies]
+s3 = [
+    "boto3>=1.34.0",
+]
 test = [
     "pytest>=7.0.0",
     "python-dotenv>=1.0.0",
+    # The S3 tests stub boto3 with botocore.stub.Stubber (no network).
+    "boto3>=1.34.0",
 ]
 
 [dependency-groups]
@@ -50,6 +55,11 @@ warn_unused_ignores = true
 [[tool.mypy.overrides]]
 module = "signal_mcp.*"
 disallow_untyped_defs = true
+
+[[tool.mypy.overrides]]
+# boto3/botocore ship no type stubs; the s3 module wraps them behind Any.
+module = ["boto3.*", "botocore.*"]
+ignore_missing_imports = true
 
 [tool.hatch.build.targets.wheel]
 packages = ["signal_mcp"]

@@ -16,6 +16,7 @@ reactions — through a long-running `signal-cli daemon`.
 - [Running the server](#running-the-server)
   - [Configuration](#configuration)
   - [Restricting recipients](#restricting-recipients-trusted-recipients)
+  - [S3 attachment storage](#s3-compatible-attachment-storage-optional)
 - [Using with Claude](#using-with-claude-mcp-client-setup)
 - [Claude Channel mode](#claude-channel-mode)
   - [How it works](#how-channel-mode-works)
@@ -145,6 +146,57 @@ are configured, enforcement is disabled and every recipient is permitted.
 For groups, the allowlist entry may be either the group's internal id or its
 display name — the server resolves the group and accepts the send if *either*
 form is allowlisted, regardless of which form the caller passed.
+
+### S3-compatible attachment storage (optional)
+
+The server can stage attachments in an S3-compatible object store and hand out
+presigned URLs. S3 support ships as an optional extra:
+
+```bash
+uv pip install 'signal-mcp[s3]'   # or: pip install 'signal-mcp[s3]'
+```
+
+Setting a bucket enables S3 mode; without one the server runs exactly as
+before and boto3 does not need to be installed.
+
+| Flag | Env var | Default | Description |
+| --- | --- | --- | --- |
+| `--s3-bucket` | `SIGNAL_MCP_S3_BUCKET` | *(none)* | Bucket for attachments. Presence enables S3 mode. |
+| `--s3-endpoint-url` | `SIGNAL_MCP_S3_ENDPOINT_URL` | AWS default | Custom endpoint for Garage, MinIO, Cloudflare R2, or GCS interop. |
+| `--s3-region` | `SIGNAL_MCP_S3_REGION` | *(SDK default)* | Region name (some stores want a fixed value, e.g. `garage`). |
+| `--s3-prefix` | `SIGNAL_MCP_S3_PREFIX` | `signal-mcp/` | Key prefix for uploaded objects. |
+| `--s3-presign-ttl` | `SIGNAL_MCP_S3_PRESIGN_TTL` | `3600` | Presigned URL lifetime in seconds. |
+| `--s3-force-path-style` / `--no-s3-force-path-style` | `SIGNAL_MCP_S3_FORCE_PATH_STYLE` | on when an endpoint is set | Path-style addressing (`endpoint/bucket/key`). Garage and MinIO need it; AWS prefers virtual-hosted. |
+
+**Credentials** are resolved exclusively through the standard AWS chain —
+`AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` environment variables, shared
+config/credentials files (`~/.aws/…`, `AWS_PROFILE`), or instance roles. There
+are deliberately no credential flags, and secrets are never logged.
+
+At startup, when S3 mode is enabled the server issues a `HeadBucket` to verify
+the bucket is reachable and exits with an actionable error when it is not
+(bad endpoint, missing bucket, missing credentials, or a path-style mismatch).
+
+Works with AWS S3 out of the box; for other stores point the endpoint at the
+service:
+
+```bash
+# Garage / MinIO (self-hosted)
+uv run signal-mcp --user-id YOUR_PHONE_NUMBER \
+    --s3-bucket signal-attachments \
+    --s3-endpoint-url http://garage.internal:3900 \
+    --s3-region garage
+
+# Cloudflare R2
+SIGNAL_MCP_S3_BUCKET=signal-attachments \
+SIGNAL_MCP_S3_ENDPOINT_URL=https://ACCOUNT_ID.r2.cloudflarestorage.com \
+    uv run signal-mcp --user-id YOUR_PHONE_NUMBER
+
+# Google Cloud Storage (S3 interoperability mode + HMAC keys)
+SIGNAL_MCP_S3_BUCKET=signal-attachments \
+SIGNAL_MCP_S3_ENDPOINT_URL=https://storage.googleapis.com \
+    uv run signal-mcp --user-id YOUR_PHONE_NUMBER
+```
 
 ## Using with Claude (MCP client setup)
 
