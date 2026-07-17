@@ -352,10 +352,18 @@ async def send(message: str, attachments: list[str] | None = None) -> dict[str, 
 async def receive_message(timeout: float = 60.0) -> MessageResponse:
     """Wait for and receive a message using signal-cli.
 
-    Returns the next actionable message (text body or emoji reaction) that
-    arrives within ``timeout`` seconds (default 60), or an empty result on
-    timeout. Messages that arrived while the daemon was streaming to this
-    server are queued, so back-to-back calls won't drop anything.
+    Returns the next actionable message (text body, attachments, or emoji
+    reaction) that arrives within ``timeout`` seconds (default 60), or an
+    empty result on timeout. Messages that arrived while the daemon was
+    streaming to this server are queued, so back-to-back calls won't drop
+    anything.
+
+    File attachments are listed in ``attachments``: each entry carries the
+    signal-cli attachment ``id``, ``content_type``, the sender's original
+    ``filename`` (may be null), ``size`` in bytes, and ``path`` — the absolute
+    local path to the downloaded file, or null when the file is not present
+    in the configured attachments directory. An attachment-only message (e.g.
+    a bare image) has ``message`` null but ``attachments`` populated.
     """
     logger.info(f"Tool called: receive_message with timeout {timeout}s")
     result = await get_client().next_message(timeout)
