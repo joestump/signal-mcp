@@ -62,6 +62,40 @@ class MessageResponse:
     attachments: list[Attachment] = field(default_factory=list)
 
 
+def _resolve_attachment_path(attachment_id: str, attachments_dir: str) -> str | None:
+    """Resolve an attachment id to the file's absolute path, or ``None``.
+
+    The id arrives over the wire, so it is treated as hostile. An id that is
+    not a plain file name (contains path separators or is absolute, e.g.
+    ``../../etc/hosts`` or ``/etc/hosts``), or whose file resolves — including
+    via symlinks — to a location outside ``attachments_dir``, is treated
+    exactly like a missing file: the caller keeps the metadata but ``path``
+    stays ``None``. A benign id resolves only when the file actually exists
+    inside the attachments directory.
+    """
+    # signal-cli stores attachments flat, so a legitimate id is always a bare
+    # file name. Reject anything else (traversal, absolute paths) outright.
+    if os.path.basename(attachment_id) != attachment_id:
+        logger.warning(
+            f"Ignoring attachment id that is not a plain file name: {attachment_id!r}"
+        )
+        return None
+
+    root = os.path.realpath(attachments_dir)
+    candidate = os.path.realpath(os.path.join(root, attachment_id))
+    # Belt and braces: even a bare-name id must never escape the attachments
+    # directory (e.g. ``..``, or a symlink inside the dir pointing elsewhere).
+    if os.path.commonpath([root, candidate]) != root:
+        logger.warning(
+            f"Ignoring attachment id resolving outside the attachments dir: "
+            f"{attachment_id!r}"
+        )
+        return None
+    if not os.path.isfile(candidate):
+        return None
+    return candidate
+
+
 def _parse_attachments(raw: Any, attachments_dir: str) -> list[Attachment]:
     """Parse the ``attachments[]`` array of a signal-cli message.
 
@@ -69,7 +103,8 @@ def _parse_attachments(raw: Any, attachments_dir: str) -> list[Attachment]:
     "photo.jpg", "id": "<stored-file-name>", "size": 12345, ...}``. The ``id``
     is the file name signal-cli stored the attachment under inside
     ``attachments_dir``; ``path`` is resolved to that file's absolute path only
-    when it actually exists on disk, and left ``None`` otherwise.
+    when it actually exists on disk *inside* that directory, and left ``None``
+    otherwise (see :func:`_resolve_attachment_path`).
     """
     attachments: list[Attachment] = []
     for item in raw or []:
@@ -78,9 +113,7 @@ def _parse_attachments(raw: Any, attachments_dir: str) -> list[Attachment]:
         attachment_id = item.get("id")
         path: str | None = None
         if attachment_id:
-            candidate = os.path.join(attachments_dir, str(attachment_id))
-            if os.path.isfile(candidate):
-                path = os.path.abspath(candidate)
+            path = _resolve_attachment_path(str(attachment_id), attachments_dir)
         attachments.append(
             Attachment(
                 id=attachment_id,

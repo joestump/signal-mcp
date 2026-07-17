@@ -176,7 +176,7 @@ def _image_with_caption() -> dict:
     )
 
 
-def _attachment_only() -> dict:
+def _attachment_only(attachment: dict | None = None) -> dict:
     """A bare image with no text body — must still produce a response."""
     return _envelope(
         ACCOUNT,
@@ -190,7 +190,7 @@ def _attachment_only() -> dict:
             "message": None,
             "groupInfo": None,
             "reaction": None,
-            "attachments": [dict(IMAGE_ATTACHMENT)],
+            "attachments": [dict(attachment or IMAGE_ATTACHMENT)],
         },
     )
 
@@ -315,7 +315,7 @@ def test_parse_image_with_caption(tmp_path):
                 content_type="image/png",
                 filename="photo.png",
                 size=12345,
-                path=str(stored),
+                path=str(stored.resolve()),
             )
         ],
     )
@@ -337,7 +337,7 @@ def test_parse_attachment_only_message(tmp_path):
             content_type="image/png",
             filename="photo.png",
             size=12345,
-            path=str(stored),
+            path=str(stored.resolve()),
         )
     ]
 
@@ -358,7 +358,7 @@ def test_parse_synced_attachment(tmp_path):
             content_type="image/png",
             filename="photo.png",
             size=12345,
-            path=str(stored),
+            path=str(stored.resolve()),
         )
     ]
 
@@ -387,13 +387,54 @@ def test_parse_attachments_defaults_to_configured_dir(tmp_path, monkeypatch):
 
     result = _parse(_attachment_only())
     assert result is not None
-    assert result.attachments[0].path == str(stored)
+    assert result.attachments[0].path == str(stored.resolve())
 
 
 def test_messages_without_attachments_have_empty_list():
     result = _parse(DIRECT_MESSAGE)
     assert result is not None
     assert result.attachments == []
+
+
+def test_hostile_attachment_ids_do_not_escape_dir(tmp_path):
+    """Traversal and absolute ids must never resolve outside attachments_dir.
+
+    The target files genuinely exist, so a bare existence check would have
+    resolved them — containment is what must reject them, yielding path=None
+    while keeping the metadata (same behavior as a missing file).
+    """
+    attachments_dir = tmp_path / "attachments"
+    attachments_dir.mkdir()
+    secret = tmp_path / "secret.txt"
+    secret.write_text("s3kr1t")
+
+    for hostile_id in ("../secret.txt", "../../etc/hosts", "/etc/hosts"):
+        envelope = _attachment_only({**IMAGE_ATTACHMENT, "id": hostile_id})
+        result = _envelope_to_response(envelope, str(attachments_dir))
+        assert result is not None
+        (attachment,) = result.attachments
+        assert attachment.path is None, hostile_id
+        assert attachment.id == hostile_id
+        assert attachment.content_type == "image/png"
+        assert attachment.filename == "photo.png"
+        assert attachment.size == 12345
+
+
+def test_symlink_escaping_attachments_dir_is_not_resolved(tmp_path):
+    """A symlink inside the dir pointing outside it must not leak the target."""
+    attachments_dir = tmp_path / "attachments"
+    attachments_dir.mkdir()
+    secret = tmp_path / "secret.txt"
+    secret.write_text("s3kr1t")
+    (attachments_dir / "link.png").symlink_to(secret)
+
+    envelope = _attachment_only({**IMAGE_ATTACHMENT, "id": "link.png"})
+    result = _envelope_to_response(envelope, str(attachments_dir))
+    assert result is not None
+    (attachment,) = result.attachments
+    assert attachment.path is None
+    assert attachment.id == "link.png"
+    assert attachment.size == 12345
 
 
 def test_send_message_builds_params(monkeypatch):
