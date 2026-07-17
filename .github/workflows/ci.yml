@@ -37,8 +37,5 @@ jobs:
       - name: Tests (pytest)
         run: uv run --extra test pytest tests/
 
-      # Non-blocking for now: the codebase is not held to a strict mypy gate yet.
-      # Flip this to blocking (remove continue-on-error) once the #10 refactor lands.
       - name: Type check (mypy)
         run: uv run mypy .
-        continue-on-error: true

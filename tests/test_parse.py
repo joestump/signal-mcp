@@ -1,13 +1,9 @@
 import asyncio
 import os
 
-from signal_mcp import main
-from signal_mcp.main import (
-    MessageResponse,
-    Reaction,
-    _envelope_to_response,
-    _send_reaction,
-)
+from signal_mcp import rpc
+from signal_mcp.parse import MessageResponse, Reaction, _envelope_to_response
+from signal_mcp.tools import _resolve_group, _send_message, _send_reaction
 
 # Self number used to build "Note to Self" / sync fixtures. Sourced from an env
 # var so no real number is ever committed; defaults to a reserved test number.
@@ -36,11 +32,11 @@ class FakeClient:
     """Stand-in for SignalRpcClient that records JSON-RPC calls."""
 
     def __init__(self) -> None:
-        self.calls: list[tuple[str, dict | None]] = []
+        self.calls: list[tuple[str, dict]] = []
         self.list_groups_result: list[dict] = []
 
     async def call(self, method, params=None, timeout=30.0):
-        self.calls.append((method, params))
+        self.calls.append((method, params or {}))
         if method == "listGroups":
             return self.list_groups_result
         return {"timestamp": 1}
@@ -78,6 +74,22 @@ DIRECT_REACTION = _envelope(
             "targetSentTimestamp": 1744185565466,
             "isRemove": False,
         },
+    },
+)
+
+# A group text message — groupInfo carries the internal group id.
+GROUP_MESSAGE = _envelope(
+    ACCOUNT,
+    source=OTHER,
+    sourceNumber=OTHER,
+    sourceName="Bob Sagat",
+    sourceDevice=2,
+    timestamp=1744185580000,
+    dataMessage={
+        "timestamp": 1744185580000,
+        "message": "hi team",
+        "groupInfo": {"groupId": "GID==", "type": "DELIVER"},
+        "reaction": None,
     },
 )
 
@@ -147,8 +159,20 @@ def test_parse_direct_message():
     assert result == MessageResponse(
         message="yo",
         sender_id=OTHER,
-        group_name=None,
+        sender_name="Bob Sagat",
+        group_id=None,
         timestamp=1744185565466,
+    )
+
+
+def test_parse_group_message_captures_group_id():
+    result = _parse(GROUP_MESSAGE)
+    assert result == MessageResponse(
+        message="hi team",
+        sender_id=OTHER,
+        sender_name="Bob Sagat",
+        group_id="GID==",
+        timestamp=1744185580000,
     )
 
 
@@ -156,6 +180,7 @@ def test_parse_direct_reaction():
     result = _parse(DIRECT_REACTION)
     assert result == MessageResponse(
         sender_id=OTHER,
+        sender_name="Bob Sagat",
         timestamp=1744185570000,
         reaction=Reaction(
             emoji="\U0001f44d",
@@ -171,6 +196,7 @@ def test_parse_sync_reaction():
     result = _parse(SYNC_REACTION)
     assert result is not None
     assert result.message is None
+    assert result.sender_name == "Tester"
     assert result.reaction == Reaction(
         emoji="\U0001f44d",
         target_author=SELF,
@@ -195,45 +221,43 @@ def test_receipts_are_ignored():
 def test_send_message_builds_params(monkeypatch):
     """_send_message issues a `send` call with recipient + message params."""
     fake = FakeClient()
-    monkeypatch.setattr(main, "client", fake)
+    monkeypatch.setattr(rpc, "client", fake)
 
-    ok = asyncio.run(main._send_message("yo", OTHER))
-    assert ok is True
+    asyncio.run(_send_message("yo", OTHER))
     method, params = fake.calls[-1]
     assert method == "send"
     assert params == {"message": "yo", "recipient": [OTHER]}
 
 
 def test_send_message_to_group_uses_group_id(monkeypatch):
-    """Group sends resolve a name to its id, then use the `groupId` param."""
+    """Group sends use the `groupId` param instead of `recipient`."""
     fake = FakeClient()
-    fake.list_groups_result = [{"id": "GID==", "name": "#talk-homelab"}]
-    monkeypatch.setattr(main, "client", fake)
+    monkeypatch.setattr(rpc, "client", fake)
 
-    ok = asyncio.run(main._send_message("yo", "GID==", is_group=True))
-    assert ok is True
+    asyncio.run(_send_message("yo", "GID==", is_group=True))
     method, params = fake.calls[-1]
     assert method == "send"
     assert params == {"message": "yo", "groupId": "GID=="}
 
 
-def test_resolve_group_id_by_name_or_id(monkeypatch):
+def test_resolve_group_by_name_or_id(monkeypatch):
     fake = FakeClient()
     fake.list_groups_result = [{"id": "GID==", "name": "#talk-homelab"}]
-    monkeypatch.setattr(main, "client", fake)
+    monkeypatch.setattr(rpc, "client", fake)
 
-    assert asyncio.run(main._resolve_group_id("#talk-homelab")) == "GID=="
-    assert asyncio.run(main._resolve_group_id("GID==")) == "GID=="
-    assert asyncio.run(main._resolve_group_id("nope")) is None
+    by_name = asyncio.run(_resolve_group("#talk-homelab"))
+    assert by_name is not None and by_name["id"] == "GID=="
+    by_id = asyncio.run(_resolve_group("GID=="))
+    assert by_id is not None and by_id["id"] == "GID=="
+    assert asyncio.run(_resolve_group("nope")) is None
 
 
 def test_send_reaction_builds_params(monkeypatch):
     """_send_reaction issues a `sendReaction` call with the right params."""
     fake = FakeClient()
-    monkeypatch.setattr(main, "client", fake)
+    monkeypatch.setattr(rpc, "client", fake)
 
-    ok = asyncio.run(_send_reaction(THUMBS_UP, SELF, SELF, 1782554453770))
-    assert ok is True
+    asyncio.run(_send_reaction(THUMBS_UP, SELF, SELF, 1782554453770))
     method, params = fake.calls[-1]
     assert method == "sendReaction"
     assert params["emoji"] == THUMBS_UP
@@ -245,7 +269,7 @@ def test_send_reaction_builds_params(monkeypatch):
 
 def test_send_reaction_remove_passes_flag(monkeypatch):
     fake = FakeClient()
-    monkeypatch.setattr(main, "client", fake)
+    monkeypatch.setattr(rpc, "client", fake)
 
     asyncio.run(_send_reaction(THUMBS_UP, SELF, SELF, 1782554453770, remove=True))
     _, params = fake.calls[-1]
