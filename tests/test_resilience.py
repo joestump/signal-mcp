@@ -425,3 +425,195 @@ def test_receive_message_allowed_when_not_channel_mode(monkeypatch):
     result = asyncio.run(receive_message(timeout=0))
     assert isinstance(result, MessageResponse)
     assert result.message is None
+
+
+# ---------------------------------------------------------------------------
+# JSON-RPC call() round-trip: success, error response, timeout
+# ---------------------------------------------------------------------------
+
+
+def test_call_returns_result_on_matching_response(monkeypatch):
+    """call() routes the reader's response back to the caller by id."""
+    conns = _install_fake_connection(monkeypatch)
+
+    async def scenario():
+        client = SignalRpcClient("daemon", 7583)
+        await client.connect()
+        reader0, _ = conns[0]
+
+        async def respond():
+            await asyncio.sleep(0.02)  # let call() register _pending[1] first
+            reader0.feed(
+                (
+                    json.dumps({"jsonrpc": "2.0", "id": 1, "result": [{"id": "G"}]})
+                    + "\n"
+                ).encode()
+            )
+
+        asyncio.create_task(respond())
+        result = await asyncio.wait_for(client.call("listGroups"), timeout=1)
+        assert result == [{"id": "G"}]
+
+    asyncio.run(scenario())
+
+
+def test_call_raises_on_error_response(monkeypatch):
+    """An {"error": ...} response surfaces as SignalCLIError."""
+    conns = _install_fake_connection(monkeypatch)
+
+    async def scenario():
+        client = SignalRpcClient("daemon", 7583)
+        await client.connect()
+        reader0, _ = conns[0]
+
+        async def respond():
+            await asyncio.sleep(0.02)
+            reader0.feed(
+                (
+                    json.dumps(
+                        {"jsonrpc": "2.0", "id": 1, "error": {"code": -1, "msg": "no"}}
+                    )
+                    + "\n"
+                ).encode()
+            )
+
+        asyncio.create_task(respond())
+        with pytest.raises(SignalCLIError):
+            await asyncio.wait_for(client.call("send"), timeout=1)
+
+    asyncio.run(scenario())
+
+
+def test_call_times_out_without_response(monkeypatch):
+    """call() times out and cleans up its pending future when no reply comes."""
+    _install_fake_connection(monkeypatch)
+
+    async def scenario():
+        client = SignalRpcClient("daemon", 7583)
+        await client.connect()
+        with pytest.raises(SignalCLIError, match="timed out"):
+            await client.call("send", timeout=0.05)
+        assert client._pending == {}
+
+    asyncio.run(scenario())
+
+
+# ---------------------------------------------------------------------------
+# Forwarder survives non-daemon errors without dropping/crashing
+# ---------------------------------------------------------------------------
+
+
+class _SeqClient:
+    """Delivers a fixed message list, then blocks (Event, sleep-patch immune).
+
+    ``receipt_fails`` makes every sendReceipt call raise.
+    """
+
+    def __init__(self, messages, receipt_fails=False):
+        self._messages = list(messages)
+        self._receipt_fails = receipt_fails
+        self._idle = asyncio.Event()
+        self.calls: list[tuple[str, dict]] = []
+
+    async def call(self, method, params=None, timeout=30.0):
+        self.calls.append((method, params or {}))
+        if self._receipt_fails and method == "sendReceipt":
+            raise SignalCLIError("receipt failed")
+        return {"timestamp": 1}
+
+    async def next_message(self, timeout: float):
+        if self._messages:
+            return self._messages.pop(0)
+        await self._idle.wait()
+
+
+def _drain_forwarder(client, stream, monkeypatch, real_sleep):
+    async def scenario():
+        monkeypatch.setattr(rpc, "client", client)
+        task = asyncio.create_task(_forward_channel_messages(stream))
+        for _ in range(1000):
+            if stream.sent:
+                break
+            await real_sleep(0)
+        await real_sleep(0.02)  # let any trailing receipt attempt run
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+    asyncio.run(scenario())
+
+
+class _CollectStream:
+    def __init__(self):
+        self.sent: list = []
+
+    async def send(self, msg):
+        self.sent.append(msg)
+
+
+def test_forwarder_survives_receipt_failure(monkeypatch):
+    """A failing read receipt neither drops the message nor kills the forwarder."""
+    monkeypatch.setattr(config, "prefix", "")
+    msg = MessageResponse(message="hi", sender_id="+15551234567", timestamp=1)
+    client = _SeqClient([msg], receipt_fails=True)
+    stream = _CollectStream()
+
+    _drain_forwarder(client, stream, monkeypatch, asyncio.sleep)
+
+    assert len(stream.sent) == 1  # delivered despite the receipt failure
+    assert any(c[0] == "sendReceipt" for c in client.calls)
+
+
+def test_forwarder_survives_notification_send_error(monkeypatch):
+    """A transient write_stream.send error is caught; the forwarder continues."""
+    monkeypatch.setattr(config, "prefix", "")
+    real_sleep = asyncio.sleep
+
+    async def fast_sleep(delay, *args, **kwargs):
+        await real_sleep(0)
+
+    monkeypatch.setattr(channel.asyncio, "sleep", fast_sleep)
+
+    m1 = MessageResponse(message="one", sender_id="+111", timestamp=1)
+    m2 = MessageResponse(message="two", sender_id="+111", timestamp=2)
+    client = _SeqClient([m1, m2])
+
+    class FlakyStream:
+        def __init__(self):
+            self.sent: list = []
+            self._failed = False
+
+        async def send(self, msg):
+            if not self._failed:
+                self._failed = True
+                raise RuntimeError("wedged pipe")
+            self.sent.append(msg)
+
+    stream = FlakyStream()
+    _drain_forwarder(client, stream, monkeypatch, real_sleep)
+
+    # The first message's send raised (and was dropped); the loop recovered and
+    # delivered the second — the forwarder did not crash.
+    assert [n.root.params["content"] for n in stream.sent] == ["two"]
+
+
+# ---------------------------------------------------------------------------
+# Group resolution failure surfaces cleanly
+# ---------------------------------------------------------------------------
+
+
+def test_send_to_group_errors_when_listgroups_fails(monkeypatch):
+    """When listGroups fails the group cannot be resolved, so the send errors."""
+    from signal_mcp.tools import send_message_to_group
+
+    monkeypatch.setattr(config, "trusted_recipients", frozenset())
+
+    class FailingGroups:
+        async def call(self, method, params=None, timeout=30.0):
+            raise SignalCLIError("daemon down")
+
+    monkeypatch.setattr(rpc, "client", FailingGroups())
+    with pytest.raises(SignalError, match="Could not find group"):
+        asyncio.run(send_message_to_group("hi", "some-group"))
