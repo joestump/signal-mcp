@@ -58,7 +58,7 @@ class FakeClient:
 
 @pytest.fixture
 def fake(monkeypatch):
-    """Install a FakeClient, disable the allowlist, and set a user_id.
+    """Install a FakeClient, disable the allowlist, and set an operator.
 
     Attachment transfer settings are pinned to their defaults (auto mode
     against a loopback daemon, 25 MB cap) so tests are hermetic regardless of
@@ -67,7 +67,7 @@ def fake(monkeypatch):
     client = FakeClient()
     monkeypatch.setattr(rpc, "client", client)
     monkeypatch.setattr(config, "trusted_recipients", frozenset())
-    monkeypatch.setattr(config, "user_id", ALICE)
+    monkeypatch.setattr(config, "operator", ALICE)
     monkeypatch.setattr(config, "attachment_transfer", "auto")
     monkeypatch.setattr(config, "attachment_max_bytes", DEFAULT_ATTACHMENT_MAX_BYTES)
     monkeypatch.setattr(config, "rpc_host", "127.0.0.1")
@@ -510,7 +510,7 @@ def test_mixed_entries_in_data_uri_mode(fake, monkeypatch, tmp_path):
 
 
 def test_parse_args_attachment_defaults(clean_config):
-    cfg = parse_args(["--user-id", ALICE])
+    cfg = parse_args(["--operator", ALICE])
     assert cfg.attachment_transfer == "auto"
     assert cfg.attachment_max_bytes == DEFAULT_ATTACHMENT_MAX_BYTES
 
@@ -518,7 +518,7 @@ def test_parse_args_attachment_defaults(clean_config):
 def test_parse_args_attachment_flags(clean_config):
     cfg = parse_args(
         [
-            "--user-id",
+            "--operator",
             ALICE,
             "--attachment-transfer",
             "data-uri",
@@ -533,25 +533,25 @@ def test_parse_args_attachment_flags(clean_config):
 def test_parse_args_attachment_env(clean_config, monkeypatch):
     monkeypatch.setenv("SIGNAL_MCP_ATTACHMENT_TRANSFER", "path")
     monkeypatch.setenv("SIGNAL_MCP_ATTACHMENT_MAX_BYTES", "2048")
-    cfg = parse_args(["--user-id", ALICE])
+    cfg = parse_args(["--operator", ALICE])
     assert cfg.attachment_transfer == "path"
     assert cfg.attachment_max_bytes == 2048
 
 
 def test_parse_args_invalid_transfer_errors(clean_config, capsys):
     with pytest.raises(SystemExit):
-        parse_args(["--user-id", ALICE, "--attachment-transfer", "carrier-pigeon"])
+        parse_args(["--operator", ALICE, "--attachment-transfer", "carrier-pigeon"])
     assert "attachment transfer" in capsys.readouterr().err
 
 
 def test_parse_args_invalid_transfer_env_errors(clean_config, monkeypatch, capsys):
     monkeypatch.setenv("SIGNAL_MCP_ATTACHMENT_TRANSFER", "carrier-pigeon")
     with pytest.raises(SystemExit):
-        parse_args(["--user-id", ALICE])
+        parse_args(["--operator", ALICE])
     assert "SIGNAL_MCP_ATTACHMENT_TRANSFER" in capsys.readouterr().err
 
 
 def test_parse_args_nonpositive_max_bytes_errors(clean_config, capsys):
     with pytest.raises(SystemExit):
-        parse_args(["--user-id", ALICE, "--attachment-max-bytes", "0"])
+        parse_args(["--operator", ALICE, "--attachment-max-bytes", "0"])
     assert "positive" in capsys.readouterr().err

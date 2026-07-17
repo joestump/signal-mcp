@@ -36,12 +36,12 @@ Signal MCP is a thin JSON-RPC client for a long-running `signal-cli daemon`. Ins
 ## Quick start
 
 ```bash
-# 1. Start the signal-cli daemon
+# 1. Start the signal-cli daemon (its -a is the ACCOUNT — the number it runs as)
 signal-cli -a YOUR_PHONE_NUMBER daemon --tcp 127.0.0.1:7583 \
   --receive-mode on-start --no-receive-stdout
 
-# 2. Run the MCP server
-uv run signal_mcp/main.py --user-id YOUR_PHONE_NUMBER --transport stdio
+# 2. Run the MCP server (--operator is who it messages; account defaults to operator)
+uv run signal-mcp --operator YOUR_PHONE_NUMBER --transport stdio
 ```
 
 Ready to dive in? Check the [installation guide](./installation.md).

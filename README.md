@@ -93,20 +93,27 @@ separate install step is optional.
 
 ## Running the server
 
-**1. Start the `signal-cli daemon`** (one warm process, JSON-RPC over TCP):
+**1. Start the `signal-cli daemon`** (one warm process, JSON-RPC over TCP). Its
+`-a` number is the **account** — the number the MCP runs as and sends *from*:
 
 ```bash
-signal-cli -a YOUR_PHONE_NUMBER daemon \
+signal-cli -a ACCOUNT_NUMBER daemon \
   --tcp 127.0.0.1:7583 --receive-mode on-start --no-receive-stdout
 ```
 
 Run the daemon under a supervisor (launchd / systemd) so it stays up.
 
-**2. Start the MCP server**, which connects to that daemon:
+**2. Start the MCP server**, which connects to that daemon. `--operator` is the
+human it serves (who it messages); pass `--account` too when it differs from the
+operator — otherwise it defaults to the operator (Note to Self):
 
 ```bash
-uv run signal-mcp --user-id YOUR_PHONE_NUMBER [--transport sse|stdio] \
+# Personal machine (account == operator == you): Note to Self
+uv run signal-mcp --operator YOUR_PHONE_NUMBER [--transport sse|stdio] \
   [--rpc-host 127.0.0.1] [--rpc-port 7583]
+
+# Dedicated agent with its own number: sends FROM the agent TO you
+uv run signal-mcp --account AGENT_NUMBER --operator YOUR_PHONE_NUMBER --transport stdio
 ```
 
 ### Configuration
@@ -114,14 +121,35 @@ uv run signal-mcp --user-id YOUR_PHONE_NUMBER [--transport sse|stdio] \
 Every flag has an environment-variable equivalent; the flag wins when both are
 set. All variables use the `SIGNAL_MCP_` prefix to avoid collisions.
 
+#### Two numbers: `account` vs `operator`
+
+signal-mcp separates the number it runs **as** from the number it talks **to**:
+
+- **`account`** — the Signal number the signal-cli daemon is logged in as
+  (its `-a`). Every message is sent *from* this number.
+- **`operator`** — the human the agent serves. The `send` ("text me") tool
+  messages this number, and in channel mode it's the default sender the agent
+  listens to. This is who the agent talks *to*.
+
+When you don't set `--account` it defaults to `--operator`: the agent runs as you
+and messages you — i.e. Note to Self, which is the right setup for a personal
+machine. Give them different values when the agent has its **own** Signal number
+(`--account +353... --operator +1206...`): it then sends *from* the agent number
+*to* you.
+
+Both are distinct from the **allowlists** (`--trusted-recipient` /
+`--trusted-sender`) below, which are security *gates* on who may be messaged and
+whose inbound messages are accepted — not addresses the agent sends to.
+
 | Flag | Env var | Default | Description |
 | --- | --- | --- | --- |
-| `--user-id` *(required)* | `SIGNAL_MCP_USER_ID` | — | Your Signal phone number (E.164). |
+| `--operator` *(required)* | `SIGNAL_MCP_OPERATOR` | — | E.164 number of the human this agent serves — default recipient of `send` and, in channel mode, the default trusted inbound sender. Who the agent talks **to**. |
+| `--account` | `SIGNAL_MCP_ACCOUNT` | *(= `--operator`)* | E.164 number the MCP runs **as** — the signal-cli daemon's `-a` account; messages are sent **from** it. Defaults to `--operator` (Note-to-Self). Set it when the agent has its own number. |
 | `--transport` | `SIGNAL_MCP_TRANSPORT` | `sse` | MCP transport: `sse` or `stdio`. Use `stdio` for Claude Desktop/Code. |
 | `--rpc-host` | `SIGNAL_MCP_RPC_HOST` | `127.0.0.1` | Host of the signal-cli daemon JSON-RPC interface. |
 | `--rpc-port` | `SIGNAL_MCP_RPC_PORT` | `7583` | Port of the signal-cli daemon JSON-RPC interface. |
 | `--trusted-recipient` | `SIGNAL_MCP_TRUSTED_RECIPIENTS` | *(none)* | Allowlist of recipients the server may message (comma-separated in the env var). See below. |
-| `--trusted-sender` | `SIGNAL_MCP_TRUSTED_SENDERS` | *(none)* | Allowlist of message authors whose inbound messages reach the agent (comma-separated in the env var). In channel mode, when unset, only messages from `--user-id` are forwarded. See below. |
+| `--trusted-sender` | `SIGNAL_MCP_TRUSTED_SENDERS` | *(none)* | Allowlist of message authors whose inbound messages reach the agent (comma-separated in the env var). In channel mode, when unset, only messages from `--operator` are forwarded. See below. |
 | `--prompts-dir` | `SIGNAL_MCP_PROMPTS_DIR` | `~/.config/signal-mcp/prompts` | Directory of user-defined prompt template files (`*.md`). A missing directory just means no user prompts. See [User-defined prompts](#user-defined-prompts). |
 | `--attachments-dir` | `SIGNAL_MCP_ATTACHMENTS_DIR` | `~/.local/share/signal-cli/attachments` | Directory where signal-cli stores received attachment files. See [Inbound attachments](#inbound-attachments). |
 | `--attachment-transfer` | `SIGNAL_MCP_ATTACHMENT_TRANSFER` | `auto` | How outbound file attachments reach the daemon: `path`, `data-uri`, or `auto`. See [Attachments](#attachments). |
@@ -129,6 +157,12 @@ set. All variables use the `SIGNAL_MCP_` prefix to avoid collisions.
 | `--log-level` | `SIGNAL_MCP_LOG_LEVEL` | `INFO` | Logging verbosity: `DEBUG`, `INFO`, `WARNING`, `ERROR`, or `CRITICAL`. |
 
 ### Restricting recipients (trusted recipients)
+
+> **This is a gate, not an address book.** `--trusted-recipient` does not tell
+> the agent *who to message* — it restricts *who it is allowed to* message. The
+> agent addresses each send itself (the `operator` for `send`, or an explicit
+> `user_id`/`group_id` for the targeted tools); this allowlist rejects any send
+> that isn't on it. When it's empty, all recipients are allowed.
 
 By default the server can message any recipient. To enforce an allowlist so the
 agent can only message recipients you have approved, pass `--trusted-recipient`
@@ -138,13 +172,13 @@ ids/names:
 
 ```bash
 # Only allow messaging Alice and one group
-uv run signal-mcp --user-id YOUR_PHONE_NUMBER \
+uv run signal-mcp --operator YOUR_PHONE_NUMBER \
     --trusted-recipient +15555550101 \
     --trusted-recipient GROUP_ID
 
 # Equivalent via environment variable
 SIGNAL_MCP_TRUSTED_RECIPIENTS="+15555550101,GROUP_ID" \
-    uv run signal-mcp --user-id YOUR_PHONE_NUMBER
+    uv run signal-mcp --operator YOUR_PHONE_NUMBER
 ```
 
 Both sources are merged. When the allowlist is non-empty, any `send_message_*`
@@ -166,13 +200,13 @@ message *author* before they reach the agent:
 
 ```bash
 # Only your own messages and Alice's may reach the agent
-uv run signal-mcp --user-id YOUR_PHONE_NUMBER --channel \
+uv run signal-mcp --operator YOUR_PHONE_NUMBER --channel \
     --trusted-sender YOUR_PHONE_NUMBER \
     --trusted-sender +15555550101
 
 # Equivalent via environment variable
 SIGNAL_MCP_TRUSTED_SENDERS="YOUR_PHONE_NUMBER,+15555550101" \
-    uv run signal-mcp --user-id YOUR_PHONE_NUMBER --channel
+    uv run signal-mcp --operator YOUR_PHONE_NUMBER --channel
 ```
 
 Both sources are merged and normalized the same way as trusted recipients. How
@@ -180,7 +214,7 @@ the gate behaves:
 
 - **Channel mode is deny-by-default.** When channel mode is enabled and no
   trusted senders are configured, only messages whose envelope `source` equals
-  `--user-id` are forwarded — by default only you (e.g. Note to Self) can
+  `--operator` are forwarded — by default only you (e.g. Note to Self) can
   reach the agent.
 - **A configured allowlist is exhaustive.** When trusted senders are
   configured, only those authors pass — include your own number if you still
@@ -254,7 +288,7 @@ service:
 
 ```bash
 # Garage / MinIO (self-hosted)
-uv run signal-mcp --user-id YOUR_PHONE_NUMBER \
+uv run signal-mcp --operator YOUR_PHONE_NUMBER \
     --s3-bucket signal-attachments \
     --s3-endpoint-url http://garage.internal:3900 \
     --s3-region garage
@@ -262,12 +296,12 @@ uv run signal-mcp --user-id YOUR_PHONE_NUMBER \
 # Cloudflare R2
 SIGNAL_MCP_S3_BUCKET=signal-attachments \
 SIGNAL_MCP_S3_ENDPOINT_URL=https://ACCOUNT_ID.r2.cloudflarestorage.com \
-    uv run signal-mcp --user-id YOUR_PHONE_NUMBER
+    uv run signal-mcp --operator YOUR_PHONE_NUMBER
 
 # Google Cloud Storage (S3 interoperability mode + HMAC keys)
 SIGNAL_MCP_S3_BUCKET=signal-attachments \
 SIGNAL_MCP_S3_ENDPOINT_URL=https://storage.googleapis.com \
-    uv run signal-mcp --user-id YOUR_PHONE_NUMBER
+    uv run signal-mcp --operator YOUR_PHONE_NUMBER
 ```
 
 ## Using with Claude (MCP client setup)
@@ -301,7 +335,7 @@ Add a `signal` entry under `mcpServers`:
         "run",
         "--directory", "/ABSOLUTE/PATH/TO/signal-mcp",
         "signal-mcp",
-        "--user-id", "+15551234567",
+        "--operator", "+15551234567",
         "--transport", "stdio"
       ],
       "env": {
@@ -326,7 +360,7 @@ launch command):
 claude mcp add signal \
   --env SIGNAL_MCP_TRUSTED_RECIPIENTS=+15555550101 \
   -- uv run --directory /ABSOLUTE/PATH/TO/signal-mcp \
-     signal-mcp --user-id +15551234567 --transport stdio
+     signal-mcp --operator +15551234567 --transport stdio
 ```
 
 Use `--scope user` to make it available across all your projects (the default
@@ -372,7 +406,7 @@ moment it arrives.
   reconnects instead of going silent for the life of the server.
 - Claude receives messages wrapped as `<channel source="signal"
   sender="..." sender_name="..." group="...">`, and can reply with the
-  `send` tool (no recipient needed — it always messages the channel owner's
+  `send` tool (no recipient needed — it always messages the channel operator's
   phone).
 
 ### Channel mode configuration
@@ -382,10 +416,10 @@ moment it arrives.
 | `--channel` | `SIGNAL_MCP_CHANNEL` | `false` | Enable Claude Channel mode. |
 | `--prefix` | `SIGNAL_MCP_PREFIX` | *(none)* | Only forward messages starting with this prefix (case-insensitive). The prefix is stripped before delivery. |
 
-All other flags (`--user-id`, `--rpc-host`, `--rpc-port`,
+All other flags (`--operator`, `--rpc-host`, `--rpc-port`,
 `--trusted-recipient`, `--trusted-sender`) work the same as in normal mode.
 Note that inbound gating is **deny-by-default** in channel mode — with no
-trusted senders configured, only messages from `--user-id` are forwarded. See
+trusted senders configured, only messages from `--operator` are forwarded. See
 [Restricting senders](#restricting-senders-inbound-security).
 
 ### Prefix filtering
@@ -406,7 +440,7 @@ sources and you only want Claude to see a subset — for example, only messages
 prefixed with `claude`:
 
 ```bash
-uv run signal-mcp --user-id YOUR_PHONE_NUMBER --channel --prefix "claude"
+uv run signal-mcp --operator YOUR_PHONE_NUMBER --channel --prefix "claude"
 ```
 
 ### Claude Code channel setup
@@ -418,7 +452,7 @@ claude mcp add signal \
   --scope user \
   --env SIGNAL_MCP_TRUSTED_RECIPIENTS=+15555550101 \
   -- uv run --directory /ABSOLUTE/PATH/TO/signal-mcp \
-     signal-mcp --user-id +15551234567 --channel
+     signal-mcp --operator +15551234567 --channel
 ```
 
 The `--prefix` flag is optional — add it if you want selective forwarding:
@@ -426,7 +460,7 @@ The `--prefix` flag is optional — add it if you want selective forwarding:
 ```bash
 claude mcp add signal \
   -- uv run --directory /ABSOLUTE/PATH/TO/signal-mcp \
-     signal-mcp --user-id +15551234567 --channel --prefix "claude"
+     signal-mcp --operator +15551234567 --channel --prefix "claude"
 ```
 
 ## Tools
@@ -440,8 +474,8 @@ result.
 
 ### `send(message, attachments=None)`
 
-Send a message to the channel owner's phone. No recipient is needed — it
-always messages the `--user-id` account.
+Send a message to the channel operator's phone. No recipient is needed — it
+always messages the `--operator` account.
 
 - `message` *(str)* — the text to send. May be empty when `attachments` are
   provided.

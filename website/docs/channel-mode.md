@@ -27,7 +27,7 @@ Claude sees the message as a `<channel>` tag in its conversation context (Crush 
 Add the `--channel` flag (or set the `SIGNAL_CHANNEL` environment variable):
 
 ```bash
-uv run signal_mcp/main.py --user-id YOUR_PHONE_NUMBER --channel
+uv run signal_mcp/main.py --operator YOUR_PHONE_NUMBER --channel
 ```
 
 Or in your MCP config (`~/.claude.json` or `.mcp.json`):
@@ -44,7 +44,7 @@ Or in your MCP config (`~/.claude.json` or `.mcp.json`):
         "/path/to/signal-mcp",
         "python",
         "signal_mcp/main.py",
-        "--user-id",
+        "--operator",
         "+15551234567",
         "--channel"
       ],
@@ -66,12 +66,12 @@ Send a **Note to Self** on Signal from your phone. Your agent will see it arrive
 
 ## Trusted senders (inbound gating)
 
-Channel mode pushes message text straight into your agent's context, so inbound gating is **deny-by-default**: with no trusted senders configured, only messages whose envelope `source` equals `--user-id` — your own number, e.g. Note to Self — are forwarded. Anything else is dropped with a log line: no notification, no read receipt.
+Channel mode pushes message text straight into your agent's context, so inbound gating is **deny-by-default**: with no trusted senders configured, only messages whose envelope `source` equals `--operator` — your own number, e.g. Note to Self — are forwarded. Anything else is dropped with a log line: no notification, no read receipt.
 
 To let other people through, configure the allowlist with the repeatable `--trusted-sender` flag or the comma-separated `SIGNAL_MCP_TRUSTED_SENDERS` environment variable:
 
 ```bash
-uv run signal_mcp/main.py --user-id +15551234567 --channel \
+uv run signal_mcp/main.py --operator +15551234567 --channel \
     --trusted-sender +15551234567 \
     --trusted-sender +15555550101
 ```
@@ -97,7 +97,7 @@ In normal (polling) mode the same filter applies to `receive_message`, but only 
 If you use Note to Self for things other than Claude, set a prefix so only tagged messages are forwarded. The prefix is stripped before delivery:
 
 ```bash
-uv run signal_mcp/main.py --user-id YOUR_PHONE_NUMBER --channel --prefix cc
+uv run signal_mcp/main.py --operator YOUR_PHONE_NUMBER --channel --prefix cc
 ```
 
 Or via environment variable:
@@ -137,11 +137,11 @@ Incoming messages arrive in Claude's context as `<channel>` tags:
 
 Agents have two ways to respond:
 
-1. **`send`** — sends to the channel owner's phone (the `--user-id` number). Use when the agent proactively wants to notify you.
+1. **`send`** — sends to the channel operator's phone (the `--operator` number). Use when the agent proactively wants to notify you.
 2. **`send_message_to_user`** — sends to any phone number. Use when replying to a specific sender from a channel message.
 
 ## Security considerations
 
 - The channel server runs locally and communicates over stdio — no network exposure for the MCP protocol itself.
-- signal-cli as a linked device receives everything your phone receives, so inbound messages are gated on the **trusted senders** allowlist (see above). In channel mode this is deny-by-default: with nothing configured, only your own messages (`--user-id`) reach the agent.
+- signal-cli as a linked device receives everything your phone receives, so inbound messages are gated on the **trusted senders** allowlist (see above). In channel mode this is deny-by-default: with nothing configured, only your own messages (`--operator`) reach the agent.
 - Use **prefix filtering** on top of sender gating to limit *which* of the trusted messages reach Claude — the prefix filters content, the allowlist filters identity.

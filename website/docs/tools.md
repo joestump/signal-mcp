@@ -8,7 +8,7 @@ Signal MCP exposes the following MCP tools:
 
 ## `send`
 
-Send a message to the channel owner's phone. No phone number needed — this uses the `--user-id` configured at startup.
+Send a message to the channel operator's phone. No phone number needed — this uses the `--operator` configured at startup.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
