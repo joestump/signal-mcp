@@ -60,6 +60,7 @@ from signal_mcp.parse import MessageResponse, Reaction, _envelope_to_response
 from signal_mcp.prompts import load_user_prompts
 from signal_mcp.rpc import (
     SignalCLIError,
+    SignalDisconnectedError,
     SignalError,
     SignalRpcClient,
     UntrustedRecipientError,
@@ -84,6 +85,7 @@ __all__ = [
     "Reaction",
     "SignalCLIError",
     "SignalConfig",
+    "SignalDisconnectedError",
     "SignalError",
     "SignalRpcClient",
     "UntrustedRecipientError",

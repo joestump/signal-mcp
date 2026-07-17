@@ -125,7 +125,7 @@ set. All variables use the `SIGNAL_MCP_` prefix to avoid collisions.
 | `--prompts-dir` | `SIGNAL_MCP_PROMPTS_DIR` | `~/.config/signal-mcp/prompts` | Directory of user-defined prompt template files (`*.md`). A missing directory just means no user prompts. See [User-defined prompts](#user-defined-prompts). |
 | `--attachments-dir` | `SIGNAL_MCP_ATTACHMENTS_DIR` | `~/.local/share/signal-cli/attachments` | Directory where signal-cli stores received attachment files. See [Inbound attachments](#inbound-attachments). |
 | `--attachment-transfer` | `SIGNAL_MCP_ATTACHMENT_TRANSFER` | `auto` | How outbound file attachments reach the daemon: `path`, `data-uri`, or `auto`. See [Attachments](#attachments). |
-| `--attachment-max-bytes` | `SIGNAL_MCP_ATTACHMENT_MAX_BYTES` | `26214400` (25 MB) | Largest local file that may be encoded as a data URI. See [Attachments](#attachments). |
+| `--attachment-max-bytes` | `SIGNAL_MCP_ATTACHMENT_MAX_BYTES` | `26214400` (25 MB) | Largest attachment accepted: caps a data-URI-encoded file and an http(s) URL download. See [Attachments](#attachments). |
 | `--log-level` | `SIGNAL_MCP_LOG_LEVEL` | `INFO` | Logging verbosity: `DEBUG`, `INFO`, `WARNING`, `ERROR`, or `CRITICAL`. |
 
 ### Restricting recipients (trusted recipients)
@@ -227,6 +227,27 @@ are deliberately no credential flags, and secrets are never logged.
 At startup, when S3 mode is enabled the server issues a `HeadBucket` to verify
 the bucket is reachable and exits with an actionable error when it is not
 (bad endpoint, missing bucket, missing credentials, or a path-style mismatch).
+
+**How inbound attachments flow.** With S3 mode on, each attachment on a received
+message is uploaded to the bucket as it arrives — under a deterministic key
+`{prefix}{YYYY}/{MM}/{message-timestamp}-{attachment-id}`, so a re-received file
+is an idempotent overwrite — and the message delivered to the agent (a
+`receive_message` result or a channel notification) carries a **presigned GET
+URL** instead of a local path. Upload and presign run off the event loop and are
+**failure-isolated**: if S3 is unreachable the message is still delivered with
+its local path, never dropped.
+
+**Why (decoupling).** Presigned URLs keep binary data out of the agent's context
+— it only ever sees a short-lived link — and free the MCP server from needing a
+shared filesystem with the harness. The server (and daemon) can run on a
+different host, e.g. over SSE, and attachments still work: the agent fetches
+them from object storage rather than reading the MCP host's disk. The outbound
+counterpart — [URL attachments](#attachments) — closes the loop, letting a
+remote harness send files it could never place on the MCP host.
+
+**Security.** A presigned URL is a bearer credential: anyone who obtains it can
+fetch the object until it expires. Keep `--s3-presign-ttl` short, use a private
+bucket, and treat the URLs as secrets in logs and transcripts.
 
 Works with AWS S3 out of the box; for other stores point the endpoint at the
 service:
@@ -342,7 +363,13 @@ moment it arrives.
   `[attachment: /path/to/file (image/png, 245 KB)]`. The local path is
   included only when the file exists on disk; otherwise the line carries the
   original filename (or attachment id) and a "file not available locally"
-  note. Claude opens the paths with its Read tool.
+  note. Claude opens the paths with its Read tool. When
+  [S3 storage](#s3-compatible-attachment-storage-optional) is enabled the line
+  instead carries a presigned URL — `[attachment: https://… (image/png, 245
+  KB)]` — which Claude downloads to a scratch dir before reading.
+- The forwarder is resilient to daemon outages: if the signal-cli daemon is
+  down at startup or restarts mid-session, it retries with backoff and
+  reconnects instead of going silent for the life of the server.
 - Claude receives messages wrapped as `<channel source="signal"
   sender="..." sender_name="..." group="...">`, and can reply with the
   `send` tool (no recipient needed — it always messages the channel owner's
@@ -444,13 +471,30 @@ Send a message to a group.
 
 ### Attachments
 
-Each entry in an `attachments` list is either:
+Each entry in an `attachments` list is one of:
 
 - a **file path** — `~` is expanded and the path is resolved to an absolute
   path. The file must exist and be readable, or the tool errors out before
-  anything is sent; or
+  anything is sent;
+- an **`http(s)` URL** — the server downloads it to a temp file (streaming,
+  with a connect/read timeout) and hands the daemon that path, or embeds it as
+  a data URI in data-URI mode. The filename comes from `Content-Disposition`
+  or the URL path, the MIME type from the response `Content-Type`; the download
+  is capped by `--attachment-max-bytes` and the temp file is removed after the
+  send. Only `http` and `https` are accepted — any other scheme is rejected.
+  This lets a harness that doesn't share a filesystem with the server send
+  files (e.g. presigned URLs from its own bucket); or
 - an **RFC 2397 data URI** — `data:<MIME>;filename=<NAME>;base64,<DATA>`,
   passed through to signal-cli unchanged in **every** transfer mode.
+
+> **SSRF note.** For URL entries the server fetches whatever URL the model
+> supplies, from the server's own network. Rely on the trusted-recipients /
+> trusted-senders posture to bound who can drive the model, and on network
+> policy (egress firewall, no link-local/metadata endpoints) to bound where the
+> server can reach. Only `http`/`https` schemes are allowed, and redirects are
+> followed only to `http`/`https` targets (a redirect to any other scheme is
+> refused) — but a redirect to another **host** is still followed, so the
+> network-policy boundary is what ultimately contains SSRF.
 
 #### Transfer modes (path vs data URI)
 
@@ -473,11 +517,12 @@ mode.
 **Size cap:** encoding embeds the whole file in the JSON-RPC request, so
 data-URI transfer is capped at `--attachment-max-bytes` /
 `SIGNAL_MCP_ATTACHMENT_MAX_BYTES` (default `26214400` = 25 MB). A file over
-the cap fails with an actionable error *before* any RPC is issued. The cap
-only applies to data-URI encoding — `path` mode hands the daemon a path and
-never reads the file. Caller-supplied `data:` URIs bypass
-`--attachment-max-bytes` entirely, in every mode: they are forwarded as-is,
-whatever their size.
+the cap fails with an actionable error *before* any RPC is issued. The same
+cap bounds `http(s)` URL downloads (the transfer aborts once it is exceeded),
+in every transfer mode. It does **not** apply to a local file in `path` mode
+(the daemon opens the path and the file is never read here). Caller-supplied
+`data:` URIs bypass `--attachment-max-bytes` entirely, in every mode: they are
+forwarded as-is, whatever their size.
 
 **Remote daemon guidance:** if your daemon runs on another host (e.g.
 `--rpc-host signal.example.com`), the default `auto` mode already does the
@@ -550,6 +595,12 @@ On timeout (or for non-actionable traffic like delivery/read receipts and
 typing indicators) an empty `MessageResponse` is returned — all fields `null`,
 which is **not** an error.
 
+> **Not available in channel mode.** The background forwarder is the single
+> consumer of the daemon's receive queue, so calling `receive_message` in
+> channel mode would race it and silently steal messages. In channel mode the
+> tool raises instead — messages are pushed to you as
+> `notifications/claude/channel` automatically.
+
 #### Inbound attachments
 
 Messages carrying files (images, documents, voice notes, …) list them in
@@ -563,7 +614,8 @@ populated. Each attachment looks like:
   "content_type": "image/png",         // MIME type
   "filename": "photo.png",             // sender's original name, may be null
   "size": 12345,                       // bytes
-  "path": "/home/you/.local/share/signal-cli/attachments/0oHirH8e8bm9oPM0NJ3B.png"
+  "path": "/home/you/.local/share/signal-cli/attachments/0oHirH8e8bm9oPM0NJ3B.png",
+  "url": null                          // presigned GET URL when S3 is on, else null
 }
 ```
 
@@ -574,6 +626,13 @@ The server resolves `path` against that directory — configurable with
 `~/.local/share/signal-cli/attachments`). When the file is not on disk (not
 yet downloaded, already cleaned up, or a non-default storage location),
 `path` is `null` but the metadata is still returned.
+
+When [S3 storage](#s3-compatible-attachment-storage-optional) is enabled the
+server uploads the file and sets `url` to a short-lived presigned GET URL;
+download it and read the bytes rather than relying on `path` (which points at
+the MCP host's disk and may not be reachable from a remote harness). If the
+upload fails, `url` stays `null` and `path` is used — the message is never
+dropped over an S3 problem.
 
 ### `mark_read(sender, target_timestamp)`
 

@@ -2,22 +2,32 @@
 
 import asyncio
 import base64
+import contextlib
 import functools
 import ipaddress
 import logging
 import mimetypes
-from collections.abc import Awaitable, Callable
+import os
+import re
+import shutil
+import tempfile
+import urllib.error
+import urllib.request
+from collections.abc import AsyncIterator, Awaitable, Callable
+from email.message import EmailMessage
 from pathlib import Path
 from typing import Any, ParamSpec, TypeVar
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 
 from mcp.server.fastmcp import FastMCP
 
+from signal_mcp import s3
 from signal_mcp.config import _normalize_recipient, config, is_trusted_sender
 from signal_mcp.parse import MessageResponse
 from signal_mcp.prompts import register_prompts
 from signal_mcp.rpc import (
     SignalCLIError,
+    SignalDisconnectedError,
     SignalError,
     UntrustedRecipientError,
     get_client,
@@ -147,14 +157,30 @@ async def _send_receipt(sender: str, target_timestamp: float) -> None:
     logger.info(f"Sent read receipt for message from {sender}")
 
 
+_URL_SCHEME_RE = re.compile(r"^[a-zA-Z][a-zA-Z0-9+.\-]*://")
+# Connect/read timeout and chunk size for outbound URL attachment downloads.
+_URL_TIMEOUT = 30.0
+_DOWNLOAD_CHUNK = 65536
+
+
+def _is_http_url(entry: str) -> bool:
+    """True when ``entry`` is an ``http://`` or ``https://`` URL."""
+    return bool(_URL_SCHEME_RE.match(entry)) and entry.split("://", 1)[0].lower() in (
+        "http",
+        "https",
+    )
+
+
 def _validate_attachments(attachments: list[str] | None) -> list[str] | None:
     """Validate outbound attachments before any RPC is issued.
 
     Entries starting with ``data:`` (RFC 2397 data URIs) pass through
-    unchanged. Anything else must be an existing, readable file — ``~`` is
-    expanded and the path is resolved to an absolute path. Raises
-    :class:`SignalError` with a clear message on the first invalid entry, so
-    the tool errors out before any daemon ``send`` is attempted.
+    unchanged. ``http(s)`` URLs pass through too (downloaded later, still
+    before any RPC); any other URL scheme is rejected. Everything else must be
+    an existing, readable file — ``~`` is expanded and the path is resolved to
+    an absolute path. Raises :class:`SignalError` with a clear message on the
+    first invalid entry, so the tool errors out before any daemon ``send`` is
+    attempted.
     """
     if not attachments:
         return None
@@ -163,6 +189,16 @@ def _validate_attachments(attachments: list[str] | None) -> list[str] | None:
     for entry in attachments:
         if entry.startswith("data:"):
             validated.append(entry)
+            continue
+
+        if _URL_SCHEME_RE.match(entry):
+            if not _is_http_url(entry):
+                scheme = entry.split("://", 1)[0].lower()
+                raise SignalError(
+                    f"Unsupported attachment URL scheme {scheme!r} in {entry!r}: "
+                    "only http and https URLs are accepted"
+                )
+            validated.append(entry)  # downloaded later, before any RPC
             continue
 
         path = Path(entry).expanduser()
@@ -210,11 +246,12 @@ def _resolve_transfer_mode() -> str:
     return "path" if _is_loopback_host(config.rpc_host) else "data-uri"
 
 
-def _encode_data_uri(path: Path) -> str:
+def _encode_data_uri(path: Path, content_type: str | None = None) -> str:
     """Encode a local file as an RFC 2397 data URI for the daemon.
 
     Produces ``data:<mime>;filename=<basename>;base64,<data>`` — the MIME type
-    is guessed from the file extension (``application/octet-stream`` when
+    is ``content_type`` when given (e.g. the Content-Type of a downloaded URL),
+    otherwise guessed from the file extension (``application/octet-stream`` when
     unknown) and the original basename is preserved in the ``filename``
     parameter so the recipient sees a sensible name. The basename is
     percent-encoded (RFC 2397/3986): a raw ``,`` or ``;`` in a filename would
@@ -236,30 +273,184 @@ def _encode_data_uri(path: Path) -> str:
     _check_cap(path.stat().st_size)
     data = path.read_bytes()
     _check_cap(len(data))
-    mime = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+    mime = (
+        content_type or mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+    )
     encoded = base64.b64encode(data).decode("ascii")
     filename = quote(path.name, safe="")
     return f"data:{mime};filename={filename};base64,{encoded}"
 
 
-def _prepare_attachments(attachments: list[str] | None) -> list[str] | None:
-    """Validate outbound attachments and apply the configured transfer mode.
+def _filename_from_content_disposition(header: str | None) -> str | None:
+    """Extract a filename from a ``Content-Disposition`` header, or ``None``.
 
-    Runs :func:`_validate_attachments` first, then — when the transfer mode
-    resolves to ``data-uri`` — encodes each local file as an RFC 2397 data URI
-    (see :func:`_encode_data_uri`). Caller-supplied ``data:`` URIs pass
-    through unchanged in every mode. Raises :class:`SignalError` before any
-    RPC is issued when validation fails or a file exceeds the size cap.
-    Future transfer steps (e.g. URL downloads, #22) plug in here.
+    Handles both ``filename=`` and RFC 2231 ``filename*=`` via the stdlib email
+    parser. Only the basename is kept, so a header can never smuggle a path.
+    """
+    if not header:
+        return None
+    msg = EmailMessage()
+    msg["Content-Disposition"] = header
+    name = msg.get_filename()
+    return os.path.basename(name) if name else None
+
+
+def _resolve_download_name(headers: Any, url: str, content_type: str | None) -> str:
+    """Pick a safe basename for a file downloaded from ``url``.
+
+    Prefers the ``Content-Disposition`` filename, then the URL path basename,
+    falling back to ``download``. Only ever a basename (no directory parts).
+    When the name has no extension, one is derived from the response
+    Content-Type so signal-cli / data-URI MIME guessing stays correct.
+    """
+    name = _filename_from_content_disposition(headers.get("Content-Disposition"))
+    if not name:
+        name = os.path.basename(urlsplit(url).path)
+    name = os.path.basename(name)
+    if not name or name in (".", ".."):
+        name = "download"
+    if content_type and not os.path.splitext(name)[1]:
+        ext = mimetypes.guess_extension(content_type)
+        if ext:
+            name += ext
+    return name
+
+
+class _HTTPSchemeRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Follow redirects only to http(s) targets.
+
+    urllib's default handler also permits ``ftp://`` redirect targets, which
+    would let a validated http(s) URL bounce to a scheme the allowlist rejects.
+    Enforcing the allowlist on every hop keeps the http(s)-only guarantee across
+    redirects. (The internal-host SSRF surface — a redirect to a private/
+    link-local http host — remains bounded by network policy; see the README.)
+    """
+
+    def redirect_request(
+        self,
+        req: urllib.request.Request,
+        fp: Any,
+        code: int,
+        msg: str,
+        headers: Any,
+        newurl: str,
+    ) -> urllib.request.Request | None:
+        if not _is_http_url(newurl):
+            raise SignalError(
+                f"Attachment URL redirected to a non-http(s) target: {newurl!r}"
+            )
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+_url_opener = urllib.request.build_opener(_HTTPSchemeRedirectHandler())
+
+
+def _download_url_blocking(url: str, tmp_dir: Path) -> tuple[Path, str | None]:
+    """Download ``url`` into ``tmp_dir``; return ``(path, content_type)``.
+
+    ``tmp_dir`` is created and registered for cleanup by :func:`_download_url`
+    *before* this runs in a worker thread, so a cancelled download can never
+    orphan an unregistered temp directory. Streams the body with a running size
+    check against ``config.attachment_max_bytes`` and raises :class:`SignalError`
+    on any failure (bad status, timeout, disallowed redirect, oversize) so the
+    tool errors before any RPC.
+    """
+    request = urllib.request.Request(url, headers={"User-Agent": "signal-mcp"})
+    try:
+        response = _url_opener.open(request, timeout=_URL_TIMEOUT)
+    except (urllib.error.URLError, OSError, ValueError) as e:
+        raise SignalError(f"Failed to download attachment URL {url!r}: {e}") from e
+
+    with response:
+        raw_type = response.headers.get("Content-Type")
+        content_type = raw_type.split(";")[0].strip().lower() if raw_type else None
+        name = _resolve_download_name(response.headers, url, content_type)
+        dest = tmp_dir / name
+        total = 0
+        try:
+            with dest.open("wb") as out:
+                while True:
+                    chunk = response.read(_DOWNLOAD_CHUNK)
+                    if not chunk:
+                        break
+                    total += len(chunk)
+                    if total > config.attachment_max_bytes:
+                        raise SignalError(
+                            f"Attachment URL {url!r} exceeds the "
+                            f"{config.attachment_max_bytes}-byte limit "
+                            "(--attachment-max-bytes / "
+                            "SIGNAL_MCP_ATTACHMENT_MAX_BYTES)"
+                        )
+                    out.write(chunk)
+        except OSError as e:
+            raise SignalError(f"Failed to save attachment from {url!r}: {e}") from e
+    return dest, content_type
+
+
+async def _download_url(url: str, cleanup: list[Path]) -> tuple[Path, str | None]:
+    """Download ``url`` off the event loop into a pre-registered temp dir.
+
+    The temp directory is created and appended to ``cleanup`` *before* the
+    blocking download is handed to a worker thread. asyncio cannot cancel the
+    thread itself, so if the awaiting coroutine is cancelled mid-download the
+    registered directory is still removed by :func:`_prepared_attachments`
+    (rather than leaking an unregistered dir the thread created).
+    """
+    tmp_dir = Path(tempfile.mkdtemp(prefix="signal-mcp-att-"))
+    cleanup.append(tmp_dir)
+    return await asyncio.to_thread(_download_url_blocking, url, tmp_dir)
+
+
+async def _prepare_attachments(
+    attachments: list[str] | None, cleanup: list[Path]
+) -> list[str] | None:
+    """Validate outbound attachments, download URLs, and apply the transfer mode.
+
+    Runs :func:`_validate_attachments` first (rejecting missing files and
+    non-http(s) URL schemes before any RPC). Each ``http(s)`` entry is then
+    downloaded to a temp file (its dir appended to ``cleanup`` for removal by
+    :func:`_prepared_attachments`) and treated like any local file thereafter.
+    Finally, when the transfer mode resolves to ``data-uri``, every non-``data:``
+    entry is encoded as an RFC 2397 data URI — a downloaded file carrying its
+    response Content-Type. Caller ``data:`` URIs pass through unchanged in every
+    mode. Raises :class:`SignalError` before any RPC on a validation/download
+    failure or a file over the size cap.
     """
     validated = _validate_attachments(attachments)
-    if not validated or _resolve_transfer_mode() != "data-uri":
-        return validated
+    if not validated:
+        return None
 
-    return [
-        entry if entry.startswith("data:") else _encode_data_uri(Path(entry))
-        for entry in validated
-    ]
+    as_data_uri = _resolve_transfer_mode() == "data-uri"
+    prepared: list[str] = []
+    for entry in validated:
+        if entry.startswith("data:"):
+            prepared.append(entry)
+        elif _is_http_url(entry):
+            path, content_type = await _download_url(entry, cleanup)
+            prepared.append(
+                _encode_data_uri(path, content_type) if as_data_uri else str(path)
+            )
+        else:  # a validated local file path
+            prepared.append(_encode_data_uri(Path(entry)) if as_data_uri else entry)
+    return prepared
+
+
+@contextlib.asynccontextmanager
+async def _prepared_attachments(
+    attachments: list[str] | None,
+) -> AsyncIterator[list[str] | None]:
+    """Prepare outbound attachments, cleaning up any temp downloads afterward.
+
+    Yields the daemon-ready ``attachments`` list (local paths and/or data URIs)
+    for the duration of the send, then removes any temp directories created for
+    downloaded http(s) URLs — whether the send succeeded or raised.
+    """
+    cleanup: list[Path] = []
+    try:
+        yield await _prepare_attachments(attachments, cleanup)
+    finally:
+        for tmp_dir in cleanup:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
 async def _send_message(
@@ -326,16 +517,16 @@ async def send_message_to_user(
 ) -> dict[str, str]:
     """Send a message to a specific user using signal-cli.
 
-    ``attachments`` is an optional list of file paths or RFC 2397 ``data:``
-    URIs (``data:<MIME>;filename=<NAME>;base64,<DATA>``). File paths are read
-    on this server's host; when the daemon is remote they are embedded as
-    data URIs automatically. ``message`` may be empty when attachments are
-    provided.
+    ``attachments`` is an optional list of file paths, ``http(s)`` URLs, or RFC
+    2397 ``data:`` URIs (``data:<MIME>;filename=<NAME>;base64,<DATA>``). File
+    paths are read on this server's host; URLs are downloaded by the server;
+    when the daemon is remote, files are embedded as data URIs automatically.
+    ``message`` may be empty when attachments are provided.
     """
     logger.info(f"Tool called: send_message_to_user for user {user_id}")
     _ensure_trusted(user_id)
-    files = _prepare_attachments(attachments)
-    await _send_message(message, user_id, is_group=False, attachments=files)
+    async with _prepared_attachments(attachments) as files:
+        await _send_message(message, user_id, is_group=False, attachments=files)
     return {"message": "Message sent successfully"}
 
 
@@ -349,13 +540,13 @@ async def send_message_to_group(
     ``group_id`` may be the group's internal id (the ``group_id`` returned by
     receive_message) or its display name. ``attachments`` is an optional list
     of file paths (read on this server's host; embedded as data URIs when the
-    daemon is remote) or RFC 2397 ``data:`` URIs; ``message`` may be empty
-    when attachments are provided.
+    daemon is remote), ``http(s)`` URLs (downloaded by the server), or RFC 2397
+    ``data:`` URIs; ``message`` may be empty when attachments are provided.
     """
     logger.info(f"Tool called: send_message_to_group for group {group_id}")
     gid = await _ensure_trusted_group(group_id)
-    files = _prepare_attachments(attachments)
-    await _send_message(message, gid, is_group=True, attachments=files)
+    async with _prepared_attachments(attachments) as files:
+        await _send_message(message, gid, is_group=True, attachments=files)
     return {"message": "Message sent successfully"}
 
 
@@ -425,16 +616,16 @@ async def send(message: str, attachments: list[str] | None = None) -> dict[str, 
     Use this when the user asks to "send a message", "text me", or anything
     about sending to Signal. No phone number needed — it sends to the channel
     owner's number. ``attachments`` is an optional list of file paths (read
-    on this server's host; embedded as data URIs when the daemon is remote)
-    or RFC 2397 ``data:`` URIs; ``message`` may be empty when attachments are
-    provided.
+    on this server's host; embedded as data URIs when the daemon is remote),
+    ``http(s)`` URLs (downloaded by the server), or RFC 2397 ``data:`` URIs;
+    ``message`` may be empty when attachments are provided.
     """
     logger.info("Tool called: send")
     if not config.user_id:
         raise SignalError("No user_id configured (set --user-id)")
     _ensure_trusted(config.user_id)
-    files = _prepare_attachments(attachments)
-    await _send_message(message, config.user_id, is_group=False, attachments=files)
+    async with _prepared_attachments(attachments) as files:
+        await _send_message(message, config.user_id, is_group=False, attachments=files)
     return {"message": "Message sent successfully"}
 
 
@@ -451,21 +642,42 @@ async def receive_message(timeout: float = 60.0) -> MessageResponse:
 
     File attachments are listed in ``attachments``: each entry carries the
     signal-cli attachment ``id``, ``content_type``, the sender's original
-    ``filename`` (may be null), ``size`` in bytes, and ``path`` — the absolute
+    ``filename`` (may be null), ``size`` in bytes, ``path`` — the absolute
     local path to the downloaded file, or null when the file is not present
-    in the configured attachments directory. An attachment-only message (e.g.
-    a bare image) has ``message`` null but ``attachments`` populated.
+    in the configured attachments directory — and ``url``, a short-lived
+    presigned GET URL when S3 storage is enabled (else null; download it and
+    read the file). An attachment-only message (e.g. a bare image) has
+    ``message`` null but ``attachments`` populated.
 
     When a trusted-senders allowlist is configured, messages from other
     authors are skipped (with a log line) and the call keeps waiting within
     the timeout; with no allowlist configured, polling is unfiltered.
+
+    Not available in channel mode: the background forwarder is the single
+    consumer of the daemon's receive queue, so a concurrent ``receive_message``
+    would race it and silently steal messages. In channel mode this raises
+    instead — messages are pushed to you as ``notifications/claude/channel``.
     """
     logger.info(f"Tool called: receive_message with timeout {timeout}s")
+    if config.channel_mode:
+        raise SignalError(
+            "receive_message is disabled in channel mode: the channel forwarder "
+            "is the single consumer of inbound messages, which are delivered to "
+            "you automatically as notifications/claude/channel."
+        )
     loop = asyncio.get_running_loop()
     deadline = loop.time() + timeout
     while True:
         remaining = deadline - loop.time()
-        result = await get_client().next_message(remaining) if remaining > 0 else None
+        try:
+            result = (
+                await get_client().next_message(remaining) if remaining > 0 else None
+            )
+        except SignalDisconnectedError:
+            # A drop mid-wait is not an error for a poller — surface it as an
+            # empty result (same as a timeout); the next call reconnects.
+            logger.info("receive_message: daemon connection dropped mid-wait")
+            return MessageResponse()
         if result is None:
             logger.info("No message received within timeout")
             return MessageResponse()
@@ -476,6 +688,9 @@ async def receive_message(timeout: float = 60.0) -> MessageResponse:
             f"Received message from {result.sender_id}"
             + (f" in group {result.group_id}" if result.group_id else "")
         )
+        # Upload attachments to S3 (best-effort) so the result carries presigned
+        # URLs; a failure leaves url=None and the local path is used instead.
+        await s3.store_inbound_attachments(result)
         return result
 
 

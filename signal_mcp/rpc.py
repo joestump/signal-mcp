@@ -1,6 +1,7 @@
 """JSON-RPC client for a long-running ``signal-cli daemon`` (TCP)."""
 
 import asyncio
+import contextlib
 import json
 import logging
 from typing import Any
@@ -19,8 +20,30 @@ class SignalCLIError(SignalError):
     """Exception raised when a signal-cli JSON-RPC call fails."""
 
 
+class SignalDisconnectedError(SignalCLIError):
+    """Raised by :meth:`SignalRpcClient.next_message` when the connection drops.
+
+    Distinct from a healthy idle timeout (which returns ``None``): a disconnect
+    is an error condition that callers should back off on before reconnecting.
+    A caller that merely wants to keep polling can treat it like a timeout.
+    """
+
+
 class UntrustedRecipientError(SignalError):
     """Raised when a send is attempted to a recipient not on the allowlist."""
+
+
+class _Disconnect:
+    """Sentinel pushed into the message queue to wake :meth:`next_message`.
+
+    When the connection drops, a blocked ``next_message`` caller must wake
+    promptly instead of waiting out its (possibly hour-long) receive timeout.
+    Teardown enqueues this sentinel; the waiter turns it into a
+    :class:`SignalDisconnectedError` and the next call reconnects.
+    """
+
+
+_DISCONNECT = _Disconnect()
 
 
 class SignalRpcClient:
@@ -39,7 +62,7 @@ class SignalRpcClient:
         self._writer: asyncio.StreamWriter | None = None
         self._reader_task: asyncio.Task[None] | None = None
         self._pending: dict[int, asyncio.Future[Any]] = {}
-        self._messages: asyncio.Queue[MessageResponse] = asyncio.Queue()
+        self._messages: asyncio.Queue[MessageResponse | _Disconnect] = asyncio.Queue()
         self._id = 0
         self._connect_lock = asyncio.Lock()
 
@@ -68,8 +91,32 @@ class SignalRpcClient:
                     f"({e}). Is the daemon running? "
                     f"(macOS: `signal-daemon status`)"
                 )
+            # A previous connection's teardown may have left disconnect
+            # sentinels in the queue. Drop them now that we have reconnected
+            # cleanly (a disconnect only matters when a caller is actively
+            # blocked or the reconnect itself fails); otherwise a stale sentinel
+            # would surface a spurious disconnect on the next next_message.
+            self._drain_disconnect_sentinels()
             self._reader_task = asyncio.create_task(self._read_loop())
             logger.info("Connected to signal-cli daemon")
+
+    def _drain_disconnect_sentinels(self) -> None:
+        """Remove any queued :data:`_DISCONNECT` sentinels, preserving messages.
+
+        Safe to call only when no reader task is producing (inside the connect
+        lock, after the old reader has torn down and before the new one starts),
+        so there is no concurrent enqueue to race.
+        """
+        kept: list[MessageResponse] = []
+        while True:
+            try:
+                item = self._messages.get_nowait()
+            except asyncio.QueueEmpty:
+                break
+            if not isinstance(item, _Disconnect):
+                kept.append(item)
+        for message in kept:
+            self._messages.put_nowait(message)
 
     async def _read_loop(self) -> None:
         assert self._reader is not None
@@ -120,6 +167,29 @@ class SignalRpcClient:
                 pass
         self._writer = None
         self._reader = None
+        # Wake any blocked next_message waiter so it can reconnect promptly
+        # instead of waiting out its (possibly hour-long) receive timeout.
+        self._messages.put_nowait(_DISCONNECT)
+
+    async def close(self) -> None:
+        """Cancel the reader task and close the connection; call on shutdown.
+
+        Cancelling the reader task runs its ``finally`` (which tears down the
+        connection and fails any pending requests). When no reader is running,
+        teardown is invoked directly so a never-connected client still releases
+        its state. Safe to call more than once.
+        """
+        task = self._reader_task
+        self._reader_task = None
+        if task is not None:
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+        # Release the writer/pending state even if the reader task was
+        # cancelled before it entered its try/finally (so its teardown never
+        # ran), or if the client never connected at all.
+        if self._writer is not None:
+            self._teardown(SignalCLIError("signal-cli daemon client closed"))
 
     async def call(
         self,
@@ -141,8 +211,17 @@ class SignalRpcClient:
         self._pending[rid] = fut
 
         logger.debug(f"JSON-RPC -> {method} (id={rid})")
-        self._writer.write((json.dumps(req) + "\n").encode())
-        await self._writer.drain()
+        try:
+            self._writer.write((json.dumps(req) + "\n").encode())
+            await self._writer.drain()
+        except OSError as e:
+            # The socket broke mid-write. Drop our own pending future (the
+            # reader loop's teardown will handle any others) and surface a
+            # typed error rather than a raw OSError.
+            self._pending.pop(rid, None)
+            raise SignalCLIError(
+                f"Failed to send {method} to signal-cli daemon: {e}"
+            ) from e
 
         try:
             return await asyncio.wait_for(fut, timeout)
@@ -151,12 +230,23 @@ class SignalRpcClient:
             raise SignalCLIError(f"signal-cli daemon timed out on {method}")
 
     async def next_message(self, timeout: float) -> MessageResponse | None:
-        """Wait up to ``timeout`` seconds for the next actionable message."""
+        """Wait up to ``timeout`` seconds for the next actionable message.
+
+        Returns ``None`` on a genuine idle timeout. Raises
+        :class:`SignalDisconnectedError` when the connection drops mid-wait (a
+        :data:`_DISCONNECT` sentinel is enqueued by teardown) — distinguishing
+        a healthy quiet period from a dropped connection so callers can back off
+        on the latter instead of hot-looping through instant reconnects. The
+        next call transparently reconnects.
+        """
         await self._ensure_connected()
         try:
-            return await asyncio.wait_for(self._messages.get(), timeout)
+            item = await asyncio.wait_for(self._messages.get(), timeout)
         except asyncio.TimeoutError:
             return None
+        if isinstance(item, _Disconnect):
+            raise SignalDisconnectedError("signal-cli daemon connection dropped")
+        return item
 
 
 # Global JSON-RPC client, created lazily from the global config.

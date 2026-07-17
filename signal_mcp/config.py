@@ -252,8 +252,9 @@ def parse_args(argv: list[str] | None = None) -> SignalConfig:
             )
         ),
         help=(
-            "Largest local file (in bytes) that may be encoded as a data URI "
-            "when the attachment transfer mode resolves to data-uri. "
+            "Largest attachment (in bytes) accepted: caps a local file encoded "
+            "as a data URI (data-uri transfer mode) and an http(s) URL download "
+            "(which aborts once the cap is exceeded). "
             f"(default: {DEFAULT_ATTACHMENT_MAX_BYTES} = 25 MB, "
             "env: SIGNAL_MCP_ATTACHMENT_MAX_BYTES)"
         ),

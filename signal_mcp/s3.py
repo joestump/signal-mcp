@@ -14,9 +14,11 @@ secrets.
 
 import asyncio
 import logging
+from datetime import datetime, timezone
 from typing import Any
 
 from signal_mcp.config import config
+from signal_mcp.parse import MessageResponse
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +30,19 @@ BOTO3_INSTALL_HINT = (
 
 class S3Error(Exception):
     """Error configuring or talking to S3-compatible storage."""
+
+
+# Bound every boto3 call so a hung or blackholed endpoint (accepts the TCP
+# connection but never responds) can't stall message flow for minutes. The
+# worst-case per-call budget is (connect + read) x attempts; it is kept *under*
+# _STORE_TIMEOUT so a stuck worker thread self-terminates around the same time
+# the wait_for ceiling fires (asyncio.wait_for bounds the await, but it cannot
+# cancel the boto3 call running in a thread — so the two must be aligned to
+# avoid stuck threads outliving the ceiling and exhausting the thread pool).
+_CONNECT_TIMEOUT = 5  # seconds per connect attempt
+_READ_TIMEOUT = 15  # seconds per read
+_MAX_ATTEMPTS = 1  # retries on top of the initial attempt (2 attempts total)
+_STORE_TIMEOUT = 45.0  # per-attachment hard ceiling on upload + presign
 
 
 # The boto3 client is built once, lazily, on first use.
@@ -61,7 +76,12 @@ def get_client() -> Any:
 
         addressing_style = "path" if config.s3_force_path_style else "virtual"
         client_kwargs: dict[str, Any] = {
-            "config": BotoConfig(s3={"addressing_style": addressing_style}),
+            "config": BotoConfig(
+                s3={"addressing_style": addressing_style},
+                connect_timeout=_CONNECT_TIMEOUT,
+                read_timeout=_READ_TIMEOUT,
+                retries={"max_attempts": _MAX_ATTEMPTS, "mode": "standard"},
+            ),
         }
         if config.s3_endpoint_url:
             client_kwargs["endpoint_url"] = config.s3_endpoint_url
@@ -119,6 +139,59 @@ async def presign(key: str, ttl: int | None = None) -> str:
         ExpiresIn=expires,
     )
     return url
+
+
+def _inbound_key(message_timestamp: int | None, attachment_id: str) -> str:
+    """Deterministic object key (relative to ``--s3-prefix``) for an attachment.
+
+    Layout: ``{YYYY}/{MM}/{message-timestamp}-{attachment-id}``. The date
+    partition is derived from the message timestamp (milliseconds since the
+    epoch, in UTC); a missing timestamp falls back to ``0`` (``1970/01``) so the
+    key is always deterministic. Deterministic keys make a re-received
+    attachment an idempotent overwrite — no dedupe bookkeeping needed.
+    """
+    ts = int(message_timestamp or 0)
+    when = datetime.fromtimestamp(ts / 1000, tz=timezone.utc)
+    return f"{when:%Y}/{when:%m}/{ts}-{attachment_id}"
+
+
+async def _upload_and_presign(path: str, key: str, content_type: str) -> str:
+    """Upload one file and return its presigned GET URL."""
+    await upload_file(path, key, content_type)
+    return await presign(key)
+
+
+async def store_inbound_attachments(msg: MessageResponse) -> None:
+    """Upload a received message's attachments to S3 and set each ``url``.
+
+    Best-effort and failure-isolated: when S3 mode is disabled, an attachment
+    has no resolved local file, or an upload/presign fails, that attachment's
+    ``url`` is left ``None`` and delivery proceeds on the local path. An S3
+    problem MUST NOT block message flow, so every failure is caught and logged,
+    and each attachment is bounded by :data:`_STORE_TIMEOUT` (in addition to the
+    per-call boto3 timeouts) so a hung endpoint cannot stall the caller — the
+    forwarder loop or ``receive_message`` — for more than that ceiling. Uploads
+    and presigning run in a thread executor, so they never block the event loop.
+    """
+    if not is_enabled():
+        return
+    for att in msg.attachments:
+        # Only files that actually resolved on disk can be uploaded; a missing
+        # local file keeps its metadata and falls back to the no-path form.
+        if not att.path or not att.id:
+            continue
+        try:
+            key = _inbound_key(msg.timestamp, att.id)
+            content_type = att.content_type or "application/octet-stream"
+            att.url = await asyncio.wait_for(
+                _upload_and_presign(att.path, key, content_type), _STORE_TIMEOUT
+            )
+            logger.info(f"Uploaded inbound attachment {att.id!r} to S3")
+        except Exception as e:  # noqa: BLE001 — S3 must never block message flow
+            logger.warning(
+                f"S3 upload failed for inbound attachment {att.id!r}; "
+                f"falling back to local path ({type(e).__name__}: {e})"
+            )
 
 
 async def validate() -> None:
