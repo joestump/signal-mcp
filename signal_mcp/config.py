@@ -24,6 +24,15 @@ class SignalConfig:
     channel_mode: bool = False
     prefix: str = ""
     log_level: str = "INFO"
+    # S3-compatible attachment storage. Setting a bucket enables S3 mode.
+    # Credentials come exclusively from the standard AWS chain (env vars,
+    # shared config files, instance roles) — never from flags.
+    s3_bucket: str = ""
+    s3_endpoint_url: str = ""  # empty = AWS default endpoint
+    s3_region: str = ""
+    s3_prefix: str = "signal-mcp/"
+    s3_presign_ttl: int = 3600
+    s3_force_path_style: bool = False
 
 
 # Global config instance shared by all modules.
@@ -48,6 +57,14 @@ def _load_trusted_recipients(cli_recipients: list[str]) -> frozenset[str]:
     return frozenset(
         normalized for raw in recipients if (normalized := _normalize_recipient(raw))
     )
+
+
+def _env_tristate(name: str) -> bool | None:
+    """Parse a boolean env var, returning ``None`` when unset or blank."""
+    raw = os.environ.get(name, "").strip().lower()
+    if not raw:
+        return None
+    return raw in ("1", "true", "yes", "on")
 
 
 def configure_logging(level: str) -> None:
@@ -120,6 +137,57 @@ def parse_args(argv: list[str] | None = None) -> SignalConfig:
         "(default: INFO, env: SIGNAL_MCP_LOG_LEVEL)",
     )
 
+    # S3-compatible attachment storage (self-contained block; issue #20).
+    # Credentials are resolved exclusively via the standard AWS chain
+    # (AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY env vars, shared config files,
+    # instance roles) — deliberately no secret-bearing flags here.
+    s3_group = parser.add_argument_group(
+        "S3 storage",
+        "Optional S3-compatible attachment storage (AWS S3, Garage, MinIO, "
+        "R2, GCS interop). Setting --s3-bucket enables S3 mode and requires "
+        "the signal-mcp[s3] extra (boto3).",
+    )
+    s3_group.add_argument(
+        "--s3-bucket",
+        default=os.environ.get("SIGNAL_MCP_S3_BUCKET", ""),
+        help="Bucket for attachment storage. Presence enables S3 mode. "
+        "(env: SIGNAL_MCP_S3_BUCKET)",
+    )
+    s3_group.add_argument(
+        "--s3-endpoint-url",
+        default=os.environ.get("SIGNAL_MCP_S3_ENDPOINT_URL", ""),
+        help="Custom S3 endpoint URL for Garage/MinIO/R2/GCS. Empty uses the "
+        "AWS default endpoint. (env: SIGNAL_MCP_S3_ENDPOINT_URL)",
+    )
+    s3_group.add_argument(
+        "--s3-region",
+        default=os.environ.get("SIGNAL_MCP_S3_REGION", ""),
+        help="Region name for the S3 client. Empty defers to the AWS SDK "
+        "defaults. (env: SIGNAL_MCP_S3_REGION)",
+    )
+    s3_group.add_argument(
+        "--s3-prefix",
+        default=os.environ.get("SIGNAL_MCP_S3_PREFIX", "signal-mcp/"),
+        help="Key prefix for uploaded objects. "
+        "(default: signal-mcp/, env: SIGNAL_MCP_S3_PREFIX)",
+    )
+    s3_group.add_argument(
+        "--s3-presign-ttl",
+        type=int,
+        default=int(os.environ.get("SIGNAL_MCP_S3_PRESIGN_TTL", "3600")),
+        help="Lifetime of presigned URLs in seconds. "
+        "(default: 3600, env: SIGNAL_MCP_S3_PRESIGN_TTL)",
+    )
+    s3_group.add_argument(
+        "--s3-force-path-style",
+        action=argparse.BooleanOptionalAction,
+        default=_env_tristate("SIGNAL_MCP_S3_FORCE_PATH_STYLE"),
+        help="Use path-style S3 addressing (bucket in the URL path). When "
+        "neither flag nor env var is given, defaults to on when a custom "
+        "--s3-endpoint-url is set (Garage and MinIO need path-style) and "
+        "off otherwise. (env: SIGNAL_MCP_S3_FORCE_PATH_STYLE)",
+    )
+
     args = parser.parse_args(argv)
 
     # --user-id is required, but may come from the environment instead of the
@@ -138,6 +206,11 @@ def parse_args(argv: list[str] | None = None) -> SignalConfig:
             f"invalid log level {args.log_level!r} "
             f"(choose one of {', '.join(LOG_LEVELS)})"
         )
+    if args.s3_presign_ttl <= 0:
+        parser.error(
+            f"invalid --s3-presign-ttl {args.s3_presign_ttl} "
+            "(must be a positive number of seconds)"
+        )
 
     config.user_id = args.user_id
     config.transport = args.transport
@@ -147,6 +220,20 @@ def parse_args(argv: list[str] | None = None) -> SignalConfig:
     config.channel_mode = args.channel
     config.prefix = args.prefix
     config.log_level = log_level
+
+    # Tri-state path-style: flag/env win when given; otherwise default to
+    # path-style whenever a custom endpoint is configured (Garage and MinIO
+    # need it), and virtual-hosted addressing for plain AWS.
+    force_path_style = args.s3_force_path_style
+    if force_path_style is None:
+        force_path_style = bool(args.s3_endpoint_url)
+
+    config.s3_bucket = args.s3_bucket
+    config.s3_endpoint_url = args.s3_endpoint_url
+    config.s3_region = args.s3_region
+    config.s3_prefix = args.s3_prefix
+    config.s3_presign_ttl = args.s3_presign_ttl
+    config.s3_force_path_style = force_path_style
 
     # Channel mode always talks to Claude over stdio.
     if config.channel_mode:
