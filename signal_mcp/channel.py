@@ -43,6 +43,15 @@ Always reply to acknowledge inbound messages, even if briefly.
 
 _SIZE_UNITS = ("B", "KB", "MB", "GB", "TB")
 
+# Channel forwarder resilience knobs. The forwarder blocks in next_message for
+# up to _RECEIVE_TIMEOUT (a daemon disconnect wakes it sooner via the queue
+# sentinel). When the daemon is unreachable it retries with exponential backoff
+# from _INITIAL_BACKOFF up to _MAX_BACKOFF, so the channel survives a daemon
+# that is down at startup or restarts mid-session.
+_RECEIVE_TIMEOUT = 3600.0
+_INITIAL_BACKOFF = 1.0
+_MAX_BACKOFF = 30.0
+
 
 def _format_size(size: int | None) -> str:
     """Format a byte count human-readably (e.g. ``245 KB``).
@@ -106,19 +115,23 @@ async def _forward_channel_messages(write_stream: Any) -> None:
     Runs alongside the MCP server. Reads messages from the signal-cli daemon's
     receive queue and pushes them as ``notifications/claude/channel`` so Claude
     sees them in real time without needing to poll ``receive_message``.
+
+    The forwarder survives daemon outages for the life of the server: if the
+    daemon is unreachable at startup or drops mid-session, ``next_message``
+    raises :class:`SignalCLIError` (or returns ``None`` on a disconnect
+    sentinel) and the loop retries with capped exponential backoff instead of
+    dying.
     """
     rpc_client = get_client()
-    try:
-        await rpc_client.connect()
-    except SignalCLIError as e:
-        logger.error(f"Channel forwarder: cannot connect to signal-cli: {e}")
-        return
-
     logger.info("Channel forwarder: listening for messages")
+    backoff = _INITIAL_BACKOFF
 
     while True:
         try:
-            msg = await rpc_client.next_message(timeout=3600)
+            msg = await rpc_client.next_message(timeout=_RECEIVE_TIMEOUT)
+            # A successful receive cycle (message or idle timeout) means the
+            # daemon is reachable again; reset the backoff.
+            backoff = _INITIAL_BACKOFF
             if msg is None:
                 continue
 
@@ -184,6 +197,15 @@ async def _forward_channel_messages(write_stream: Any) -> None:
                     logger.warning("Channel forwarder: failed to send read receipt")
         except asyncio.CancelledError:
             raise
+        except SignalCLIError as e:
+            # The daemon is unreachable (down at startup, or dropped and not
+            # yet back). Back off and retry — do not kill the forwarder.
+            logger.warning(
+                f"Channel forwarder: signal-cli daemon unreachable ({e}); "
+                f"retrying in {backoff:.0f}s"
+            )
+            await asyncio.sleep(backoff)
+            backoff = min(backoff * 2, _MAX_BACKOFF)
         except Exception as e:  # noqa: BLE001
             logger.error(f"Channel forwarder error: {e}")
             await asyncio.sleep(1)
@@ -207,3 +229,5 @@ async def run_channel_async() -> None:
             forwarder.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await forwarder
+            # Cancel the daemon reader task and close the socket on shutdown.
+            await get_client().close()

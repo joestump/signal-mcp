@@ -459,8 +459,19 @@ async def receive_message(timeout: float = 60.0) -> MessageResponse:
     When a trusted-senders allowlist is configured, messages from other
     authors are skipped (with a log line) and the call keeps waiting within
     the timeout; with no allowlist configured, polling is unfiltered.
+
+    Not available in channel mode: the background forwarder is the single
+    consumer of the daemon's receive queue, so a concurrent ``receive_message``
+    would race it and silently steal messages. In channel mode this raises
+    instead — messages are pushed to you as ``notifications/claude/channel``.
     """
     logger.info(f"Tool called: receive_message with timeout {timeout}s")
+    if config.channel_mode:
+        raise SignalError(
+            "receive_message is disabled in channel mode: the channel forwarder "
+            "is the single consumer of inbound messages, which are delivered to "
+            "you automatically as notifications/claude/channel."
+        )
     loop = asyncio.get_running_loop()
     deadline = loop.time() + timeout
     while True:
