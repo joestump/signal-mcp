@@ -5,12 +5,10 @@ from unittest.mock import patch
 
 from mcp.types import JSONRPCNotification
 
-from signal_mcp.main import (
-    MessageResponse,
-    Reaction,
-    _forward_channel_messages,
-    config,
-)
+from signal_mcp import rpc
+from signal_mcp.channel import _forward_channel_messages, _strip_prefix
+from signal_mcp.config import config
+from signal_mcp.parse import MessageResponse, Reaction
 
 
 class FakeWriteStream:
@@ -28,13 +26,13 @@ class FakeClient:
 
     def __init__(self, messages: list) -> None:
         self._messages = list(messages)
-        self.calls: list[tuple[str, dict | None]] = []
+        self.calls: list[tuple[str, dict]] = []
 
-    async def _ensure_connected(self) -> None:
+    async def connect(self) -> None:
         pass
 
     async def call(self, method, params=None, timeout=30.0):
-        self.calls.append((method, params))
+        self.calls.append((method, params or {}))
         return {"timestamp": 1}
 
     async def next_message(self, timeout: float):
@@ -46,11 +44,16 @@ class FakeClient:
 def _text_msg(
     text: str,
     sender: str = "+1234",
+    sender_name: str | None = None,
     group: str | None = None,
     timestamp: int = 1744185565466,
 ):
     return MessageResponse(
-        message=text, sender_id=sender, group_name=group, timestamp=timestamp
+        message=text,
+        sender_id=sender,
+        sender_name=sender_name,
+        group_id=group,
+        timestamp=timestamp,
     )
 
 
@@ -63,7 +66,7 @@ def _run_forwarder(messages, prefix=""):
     stream = FakeWriteStream()
 
     async def _runner():
-        with patch("signal_mcp.main._client", return_value=fake_client):
+        with patch.object(rpc, "client", fake_client):
             task = asyncio.create_task(_forward_channel_messages(stream))
             await asyncio.sleep(0.15)
             task.cancel()
@@ -83,9 +86,21 @@ def test_forwards_text_message():
     notif = sent[0].root
     assert isinstance(notif, JSONRPCNotification)
     assert notif.method == "notifications/claude/channel"
-    assert notif.params["content"] == "hello world"
-    assert notif.params["meta"]["sender"] == "+15551234567"
-    assert "group" not in notif.params["meta"]
+    params = notif.params
+    assert params is not None
+    assert params["content"] == "hello world"
+    assert params["meta"]["sender"] == "+15551234567"
+    assert "group" not in params["meta"]
+    assert "sender_name" not in params["meta"]
+
+
+def test_forwards_sender_name_in_meta():
+    """The sender's profile name is included as sender_name when known."""
+    sent, _ = _run_forwarder(
+        [_text_msg("hello", sender="+15551234567", sender_name="Bob Sagat")]
+    )
+    assert len(sent) == 1
+    assert sent[0].root.params["meta"]["sender_name"] == "Bob Sagat"
 
 
 def test_forwards_group_message_with_meta():
@@ -120,6 +135,30 @@ def test_prefix_filters_and_strips():
     assert len(sent) == 2
     assert sent[0].root.params["content"] == "run tests"
     assert sent[1].root.params["content"] == "deploy now"
+
+
+def test_prefix_requires_word_boundary():
+    """Prefix `cc` must not match `ccdeploy` — only whole-word matches count."""
+    sent, _ = _run_forwarder(
+        [
+            _text_msg("ccdeploy now"),
+            _text_msg("cc deploy now"),
+        ],
+        prefix="cc",
+    )
+    assert len(sent) == 1
+    assert sent[0].root.params["content"] == "deploy now"
+
+
+def test_strip_prefix_word_boundary_cases():
+    assert _strip_prefix("cc run tests", "cc") == "run tests"
+    assert _strip_prefix("  CC run tests", "cc") == "run tests"
+    assert _strip_prefix("ccdeploy now", "cc") is None
+    assert _strip_prefix("cc_deploy now", "cc") is None
+    assert _strip_prefix("buy milk", "cc") is None
+    assert _strip_prefix("cc", "cc") == ""
+    # A prefix that itself ends in punctuation carries its own boundary.
+    assert _strip_prefix("cc:deploy", "cc:") == "deploy"
 
 
 def test_notification_is_valid_jsonrpc():

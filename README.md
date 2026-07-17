@@ -99,7 +99,7 @@ Run the daemon under a supervisor (launchd / systemd) so it stays up.
 **2. Start the MCP server**, which connects to that daemon:
 
 ```bash
-uv run server --user-id YOUR_PHONE_NUMBER [--transport sse|stdio] \
+uv run signal-mcp --user-id YOUR_PHONE_NUMBER [--transport sse|stdio] \
   [--rpc-host 127.0.0.1] [--rpc-port 7583]
 ```
 
@@ -115,6 +115,7 @@ set. All variables use the `SIGNAL_MCP_` prefix to avoid collisions.
 | `--rpc-host` | `SIGNAL_MCP_RPC_HOST` | `127.0.0.1` | Host of the signal-cli daemon JSON-RPC interface. |
 | `--rpc-port` | `SIGNAL_MCP_RPC_PORT` | `7583` | Port of the signal-cli daemon JSON-RPC interface. |
 | `--trusted-recipient` | `SIGNAL_MCP_TRUSTED_RECIPIENTS` | *(none)* | Allowlist of recipients the server may message (comma-separated in the env var). See below. |
+| `--log-level` | `SIGNAL_MCP_LOG_LEVEL` | `INFO` | Logging verbosity: `DEBUG`, `INFO`, `WARNING`, `ERROR`, or `CRITICAL`. |
 
 ### Restricting recipients (trusted recipients)
 
@@ -126,19 +127,23 @@ ids/names:
 
 ```bash
 # Only allow messaging Alice and one group
-uv run server --user-id YOUR_PHONE_NUMBER \
+uv run signal-mcp --user-id YOUR_PHONE_NUMBER \
     --trusted-recipient +15555550101 \
     --trusted-recipient GROUP_ID
 
 # Equivalent via environment variable
 SIGNAL_MCP_TRUSTED_RECIPIENTS="+15555550101,GROUP_ID" \
-    uv run server --user-id YOUR_PHONE_NUMBER
+    uv run signal-mcp --user-id YOUR_PHONE_NUMBER
 ```
 
 Both sources are merged. When the allowlist is non-empty, any `send_message_*`
 or `send_reaction_*` call targeting a recipient that is not on it is rejected
 with an error *before* the daemon is asked to send. When no trusted recipients
 are configured, enforcement is disabled and every recipient is permitted.
+
+For groups, the allowlist entry may be either the group's internal id or its
+display name — the server resolves the group and accepts the send if *either*
+form is allowlisted, regardless of which form the caller passed.
 
 ## Using with Claude (MCP client setup)
 
@@ -148,7 +153,7 @@ must already be running (see [Running the server](#running-the-server)) — the
 MCP server is just a client to it.
 
 The launch command below uses [`uv`](https://docs.astral.sh/uv/) to run the
-`server` entry point from a checkout. Replace `/ABSOLUTE/PATH/TO/signal-mcp`
+`signal-mcp` entry point from a checkout. Replace `/ABSOLUTE/PATH/TO/signal-mcp`
 with the path to this repository and `+15551234567` with your Signal number.
 
 ### Claude Desktop
@@ -170,7 +175,7 @@ Add a `signal` entry under `mcpServers`:
       "args": [
         "run",
         "--directory", "/ABSOLUTE/PATH/TO/signal-mcp",
-        "server",
+        "signal-mcp",
         "--user-id", "+15551234567",
         "--transport", "stdio"
       ],
@@ -196,7 +201,7 @@ launch command):
 claude mcp add signal \
   --env SIGNAL_MCP_TRUSTED_RECIPIENTS=+15555550101 \
   -- uv run --directory /ABSOLUTE/PATH/TO/signal-mcp \
-     server --user-id +15551234567 --transport stdio
+     signal-mcp --user-id +15551234567 --transport stdio
 ```
 
 Use `--scope user` to make it available across all your projects (the default
@@ -245,16 +250,17 @@ All other flags (`--user-id`, `--rpc-host`, `--rpc-port`,
 ### Prefix filtering
 
 When `--prefix` is set, only messages whose body starts with the prefix (after
-leading whitespace, case-insensitive) are forwarded to Claude. The prefix is
-stripped from the message before delivery. Messages that don't match are
-dropped silently.
+leading whitespace, case-insensitive) are forwarded to Claude. The prefix must
+end on a word boundary — prefix `cc` matches `cc deploy` but not `ccdeploy`.
+The prefix is stripped from the message before delivery. Messages that don't
+match are dropped silently.
 
 This is useful when the signal-cli daemon receives messages from multiple
 sources and you only want Claude to see a subset — for example, only messages
 prefixed with `claude`:
 
 ```bash
-uv run server --user-id YOUR_PHONE_NUMBER --channel --prefix "claude"
+uv run signal-mcp --user-id YOUR_PHONE_NUMBER --channel --prefix "claude"
 ```
 
 ### Claude Code channel setup
@@ -266,7 +272,7 @@ claude mcp add signal \
   --scope user \
   --env SIGNAL_MCP_TRUSTED_RECIPIENTS=+15555550101 \
   -- uv run --directory /ABSOLUTE/PATH/TO/signal-mcp \
-     server --user-id +15551234567 --channel
+     signal-mcp --user-id +15551234567 --channel
 ```
 
 The `--prefix` flag is optional — add it if you want selective forwarding:
@@ -274,15 +280,17 @@ The `--prefix` flag is optional — add it if you want selective forwarding:
 ```bash
 claude mcp add signal \
   -- uv run --directory /ABSOLUTE/PATH/TO/signal-mcp \
-     server --user-id +15551234567 --channel --prefix "claude"
+     signal-mcp --user-id +15551234567 --channel --prefix "claude"
 ```
 
 ## Tools
 
 The server exposes **seven** tools. In channel mode, messages are automatically
 marked as read when forwarded. Every `send_*` and `mark_read` tool returns
-`{"message": "..."}` on success or `{"error": "..."}` on failure (including
-when a recipient is blocked by the allowlist).
+`{"message": "..."}` on success; failures (including recipients blocked by the
+allowlist) are reported as proper MCP tool errors (`isError`) with the reason
+in the error message, not as an `{"error": ...}` payload inside a successful
+result.
 
 ### `send(message)`
 
@@ -303,7 +311,7 @@ Send a direct message to a user.
 Send a message to a group.
 
 - `message` *(str)* — the text to send.
-- `group_id` *(str)* — the group's internal id (the `group_name` returned by
+- `group_id` *(str)* — the group's internal id (the `group_id` returned by
   `receive_message`) **or** its display name; the server resolves either.
 
 ### `send_reaction_to_user(emoji, user_id, target_author, target_timestamp, remove=False)`
@@ -326,13 +334,13 @@ React to a user's message with an emoji.
 React to a message in a group. Same parameters as `send_reaction_to_user`,
 except `group_id` (id or display name) identifies the group.
 
-### `receive_message(timeout)`
+### `receive_message(timeout=60)`
 
 Wait up to `timeout` seconds for the next actionable message (text body or
 emoji reaction) and return it. Messages that arrived while the daemon was
 streaming are queued, so back-to-back calls won't drop anything.
 
-- `timeout` *(float)* — seconds to wait.
+- `timeout` *(float, default `60`)* — seconds to wait.
 
 Returns a `MessageResponse` object. A **text message** populates `message`; an
 **emoji reaction** populates `reaction` (with `message` left `null`), so callers
@@ -340,14 +348,18 @@ can tell the two apart:
 
 ```jsonc
 {
-  "message": "hey there",        // text body, or null for a reaction
-  "sender_id": "+15551234567",   // who sent it
-  "group_name": "GROUP_ID==",    // group id if it was a group message, else null
-  "timestamp": 1744185565466,    // ms; pass back as target_timestamp to react
-  "error": null,                 // set only on failure
-  "reaction": null               // or a Reaction object (see below)
+  "message": "hey there",         // text body, or null for a reaction
+  "sender_id": "+15551234567",    // who sent it
+  "sender_name": "Alice Example", // sender's profile/contact name, if known
+  "group_id": "GROUP_ID==",       // group id if it was a group message, else null
+  "timestamp": 1744185565466,     // ms; pass back as target_timestamp to react
+  "reaction": null                // or a Reaction object (see below)
 }
 ```
+
+> **Breaking change:** this field was previously named `group_name` (it always
+> carried the group *id*), and failures were previously reported via an `error`
+> field. Failures are now raised as MCP tool errors instead.
 
 When the message is a reaction, `reaction` holds:
 

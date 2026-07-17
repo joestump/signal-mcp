@@ -83,11 +83,11 @@ Wait for and receive the next actionable message (text or reaction) within a tim
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `timeout` | `float` | Yes | Seconds to wait |
+| `timeout` | `float` | No | Seconds to wait (default: `60`) |
 
 Returns a `MessageResponse` with either:
 
-- **Text message**: `message`, `sender_id`, `group_name`, `timestamp`
+- **Text message**: `message`, `sender_id`, `sender_name`, `group_id`, `timestamp`
 - **Reaction**: `reaction` (emoji, target_author, target_timestamp, is_remove)
 - **Timeout**: empty response (all fields `None`)
 
