@@ -16,6 +16,7 @@ reactions — through a long-running `signal-cli daemon`.
 - [Running the server](#running-the-server)
   - [Configuration](#configuration)
   - [Restricting recipients](#restricting-recipients-trusted-recipients)
+  - [Restricting senders](#restricting-senders-inbound-security)
   - [S3 attachment storage](#s3-compatible-attachment-storage-optional)
 - [Using with Claude](#using-with-claude-mcp-client-setup)
 - [Claude Channel mode](#claude-channel-mode)
@@ -34,6 +35,8 @@ reactions — through a long-running `signal-cli daemon`.
 - Receive and parse incoming messages, including emoji reactions and
   "Note to Self" reaction syncs that plain-text parsing can't recover
 - Restrict who the server may message with a trusted-recipients allowlist
+- Gate inbound messages on a trusted-senders allowlist — deny-by-default in
+  channel mode, so strangers can't inject prompts into the agent's context
 - Talks to a persistent `signal-cli daemon`, so calls are fast and never fight
   over the account lock
 
@@ -117,6 +120,7 @@ set. All variables use the `SIGNAL_MCP_` prefix to avoid collisions.
 | `--rpc-host` | `SIGNAL_MCP_RPC_HOST` | `127.0.0.1` | Host of the signal-cli daemon JSON-RPC interface. |
 | `--rpc-port` | `SIGNAL_MCP_RPC_PORT` | `7583` | Port of the signal-cli daemon JSON-RPC interface. |
 | `--trusted-recipient` | `SIGNAL_MCP_TRUSTED_RECIPIENTS` | *(none)* | Allowlist of recipients the server may message (comma-separated in the env var). See below. |
+| `--trusted-sender` | `SIGNAL_MCP_TRUSTED_SENDERS` | *(none)* | Allowlist of message authors whose inbound messages reach the agent (comma-separated in the env var). In channel mode, when unset, only messages from `--user-id` are forwarded. See below. |
 | `--attachments-dir` | `SIGNAL_MCP_ATTACHMENTS_DIR` | `~/.local/share/signal-cli/attachments` | Directory where signal-cli stores received attachment files. See [Inbound attachments](#inbound-attachments). |
 | `--log-level` | `SIGNAL_MCP_LOG_LEVEL` | `INFO` | Logging verbosity: `DEBUG`, `INFO`, `WARNING`, `ERROR`, or `CRITICAL`. |
 
@@ -147,6 +151,48 @@ are configured, enforcement is disabled and every recipient is permitted.
 For groups, the allowlist entry may be either the group's internal id or its
 display name — the server resolves the group and accepts the send if *either*
 form is allowlisted, regardless of which form the caller passed.
+
+### Restricting senders (inbound security)
+
+Anyone who can message your Signal account can put text in front of the agent —
+an inbound **prompt-injection** vector, especially in
+[channel mode](#claude-channel-mode) where messages are pushed straight into
+Claude's context. The trusted-senders allowlist gates inbound messages on the
+message *author* before they reach the agent:
+
+```bash
+# Only your own messages and Alice's may reach the agent
+uv run signal-mcp --user-id YOUR_PHONE_NUMBER --channel \
+    --trusted-sender YOUR_PHONE_NUMBER \
+    --trusted-sender +15555550101
+
+# Equivalent via environment variable
+SIGNAL_MCP_TRUSTED_SENDERS="YOUR_PHONE_NUMBER,+15555550101" \
+    uv run signal-mcp --user-id YOUR_PHONE_NUMBER --channel
+```
+
+Both sources are merged and normalized the same way as trusted recipients. How
+the gate behaves:
+
+- **Channel mode is deny-by-default.** When channel mode is enabled and no
+  trusted senders are configured, only messages whose envelope `source` equals
+  `--user-id` are forwarded — by default only you (e.g. Note to Self) can
+  reach the agent.
+- **A configured allowlist is exhaustive.** When trusted senders are
+  configured, only those authors pass — include your own number if you still
+  want your own messages forwarded.
+- **The check applies to the author, never the group.** A group message is
+  gated on who wrote it (the envelope `source`); membership in a group —
+  even an allowlisted one — grants nothing.
+- **Untrusted messages are dropped silently.** One log line is written; no
+  notification is emitted and no read receipt is sent.
+- **Polling is opt-in (unlike channel mode).** `receive_message` applies the
+  same filter only when trusted senders are configured; with none configured,
+  polling behavior is unchanged. This asymmetry is deliberate: polling puts an
+  explicit tool call between Signal and the model, while channel mode pushes
+  messages straight into context.
+
+This is separate from `--trusted-recipient`, which restricts *outbound* sends.
 
 ### S3-compatible attachment storage (optional)
 
@@ -299,7 +345,10 @@ moment it arrives.
 | `--prefix` | `SIGNAL_MCP_PREFIX` | *(none)* | Only forward messages starting with this prefix (case-insensitive). The prefix is stripped before delivery. |
 
 All other flags (`--user-id`, `--rpc-host`, `--rpc-port`,
-`--trusted-recipient`) work the same as in normal mode.
+`--trusted-recipient`, `--trusted-sender`) work the same as in normal mode.
+Note that inbound gating is **deny-by-default** in channel mode — with no
+trusted senders configured, only messages from `--user-id` are forwarded. See
+[Restricting senders](#restricting-senders-inbound-security).
 
 ### Prefix filtering
 

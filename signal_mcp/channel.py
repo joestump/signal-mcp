@@ -14,7 +14,7 @@ from typing import Any
 from mcp.server.stdio import stdio_server
 from mcp.types import JSONRPCMessage, JSONRPCNotification
 
-from signal_mcp.config import config
+from signal_mcp.config import config, is_trusted_sender
 from signal_mcp.prompts import SIGNAL_FORMATTING_RULES
 from signal_mcp.rpc import SignalCLIError, get_client
 from signal_mcp.tools import _send_receipt, mcp
@@ -79,6 +79,16 @@ async def _forward_channel_messages(write_stream: Any) -> None:
                 continue
             # Only forward text messages, not reactions.
             if not msg.message:
+                continue
+
+            # Trusted-sender gating — the check applies to the message
+            # author (envelope source), never the group id. Untrusted
+            # senders are dropped: no notification, no read receipt.
+            if not is_trusted_sender(msg.sender_id):
+                logger.info(
+                    "Channel forwarder: dropped message from "
+                    f"untrusted sender {msg.sender_id}"
+                )
                 continue
 
             text = msg.message
