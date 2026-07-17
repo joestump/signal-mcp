@@ -56,6 +56,7 @@ from signal_mcp.config import (
     parse_args,
 )
 from signal_mcp.parse import MessageResponse, Reaction, _envelope_to_response
+from signal_mcp.prompts import load_user_prompts
 from signal_mcp.rpc import (
     SignalCLIError,
     SignalError,
@@ -129,6 +130,9 @@ def main() -> None:
     cfg = parse_args()
     configure_logging(cfg.log_level)
     _log_startup(cfg)
+    user_prompts = load_user_prompts(mcp, cfg.prompts_dir)
+    if user_prompts:
+        logger.info(f"Loaded {user_prompts} user prompt(s) from {cfg.prompts_dir}")
     try:
         if cfg.channel_mode:
             mcp._mcp_server.instructions = CHANNEL_INSTRUCTIONS

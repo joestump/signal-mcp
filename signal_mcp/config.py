@@ -4,9 +4,13 @@ import argparse
 import logging
 import os
 from dataclasses import dataclass, field
+from pathlib import Path
 
 LOG_FORMAT = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 LOG_LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL")
+
+# Default directory scanned for user-defined prompt template files (*.md).
+DEFAULT_PROMPTS_DIR = "~/.config/signal-mcp/prompts"
 
 
 @dataclass
@@ -23,6 +27,11 @@ class SignalConfig:
     trusted_recipients: frozenset[str] = field(default_factory=frozenset)
     channel_mode: bool = False
     prefix: str = ""
+    # Directory of user-defined prompt templates (*.md files with YAML
+    # frontmatter). A missing directory simply means no user prompts.
+    prompts_dir: Path = field(
+        default_factory=lambda: Path(DEFAULT_PROMPTS_DIR).expanduser()
+    )
     log_level: str = "INFO"
 
 
@@ -114,6 +123,13 @@ def parse_args(argv: list[str] | None = None) -> SignalConfig:
         "delivery. (env: SIGNAL_MCP_PREFIX)",
     )
     parser.add_argument(
+        "--prompts-dir",
+        default=os.environ.get("SIGNAL_MCP_PROMPTS_DIR", DEFAULT_PROMPTS_DIR),
+        help="Directory of user-defined prompt template files (*.md with YAML "
+        "frontmatter). A missing directory just means no user prompts. "
+        f"(default: {DEFAULT_PROMPTS_DIR}, env: SIGNAL_MCP_PROMPTS_DIR)",
+    )
+    parser.add_argument(
         "--log-level",
         default=os.environ.get("SIGNAL_MCP_LOG_LEVEL", "INFO"),
         help="Logging verbosity: DEBUG, INFO, WARNING, ERROR, or CRITICAL. "
@@ -146,6 +162,7 @@ def parse_args(argv: list[str] | None = None) -> SignalConfig:
     config.trusted_recipients = _load_trusted_recipients(args.trusted_recipients)
     config.channel_mode = args.channel
     config.prefix = args.prefix
+    config.prompts_dir = Path(args.prompts_dir).expanduser()
     config.log_level = log_level
 
     # Channel mode always talks to Claude over stdio.
