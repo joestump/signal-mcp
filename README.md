@@ -292,27 +292,52 @@ allowlist) are reported as proper MCP tool errors (`isError`) with the reason
 in the error message, not as an `{"error": ...}` payload inside a successful
 result.
 
-### `send(message)`
+### `send(message, attachments=None)`
 
 Send a message to the channel owner's phone. No recipient is needed — it
 always messages the `--user-id` account.
 
-- `message` *(str)* — the text to send.
+- `message` *(str)* — the text to send. May be empty when `attachments` are
+  provided.
+- `attachments` *(list[str], optional)* — attachments to send (see
+  [Attachments](#attachments)).
 
-### `send_message_to_user(message, user_id)`
+### `send_message_to_user(message, user_id, attachments=None)`
 
 Send a direct message to a user.
 
-- `message` *(str)* — the text to send.
+- `message` *(str)* — the text to send. May be empty when `attachments` are
+  provided.
 - `user_id` *(str)* — recipient phone number (E.164).
+- `attachments` *(list[str], optional)* — attachments to send (see
+  [Attachments](#attachments)).
 
-### `send_message_to_group(message, group_id)`
+### `send_message_to_group(message, group_id, attachments=None)`
 
 Send a message to a group.
 
-- `message` *(str)* — the text to send.
+- `message` *(str)* — the text to send. May be empty when `attachments` are
+  provided.
 - `group_id` *(str)* — the group's internal id (the `group_id` returned by
   `receive_message`) **or** its display name; the server resolves either.
+- `attachments` *(list[str], optional)* — attachments to send (see
+  [Attachments](#attachments)).
+
+### Attachments
+
+Each entry in an `attachments` list is either:
+
+- a **file path** — `~` is expanded and the path is resolved to an absolute
+  path. The file must exist and be readable, or the tool errors out before
+  anything is sent; or
+- an **RFC 2397 data URI** — `data:<MIME>;filename=<NAME>;base64,<DATA>`,
+  passed through to signal-cli unchanged.
+
+> **Remote daemon caveat:** file paths are resolved on the host where the
+> signal-cli daemon runs. When the daemon is remote (a different machine or a
+> container without a shared filesystem), local paths won't exist there — use
+> data URIs instead, which embed the file content and work regardless of where
+> the daemon lives.
 
 ### `send_reaction_to_user(emoji, user_id, target_author, target_timestamp, remove=False)`
 

@@ -88,7 +88,7 @@ def test_send_message_to_user_blocks_untrusted(monkeypatch):
 def test_send_message_to_user_allows_trusted(monkeypatch):
     sent = {}
 
-    async def fake_send(message, target, is_group=False):
+    async def fake_send(message, target, is_group=False, attachments=None):
         sent["target"] = target
 
     monkeypatch.setattr(tools, "_send_message", fake_send)
@@ -152,7 +152,7 @@ def test_send_message_to_group_blocks_unresolvable_untrusted(monkeypatch):
 def test_send_message_to_group_allows_trusted(monkeypatch):
     sent = {}
 
-    async def fake_send(message, target, is_group=False):
+    async def fake_send(message, target, is_group=False, attachments=None):
         sent["target"] = target
         sent["is_group"] = is_group
 
@@ -186,7 +186,7 @@ def test_group_allowlisted_by_id_send_by_name(monkeypatch):
     """The allowlist holds the id; the caller passes the display name."""
     sent = {}
 
-    async def fake_send(message, target, is_group=False):
+    async def fake_send(message, target, is_group=False, attachments=None):
         sent["target"] = target
 
     monkeypatch.setattr(

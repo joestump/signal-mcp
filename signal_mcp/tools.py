@@ -3,6 +3,7 @@
 import functools
 import logging
 from collections.abc import Awaitable, Callable
+from pathlib import Path
 from typing import Any, ParamSpec, TypeVar
 
 from mcp.server.fastmcp import FastMCP
@@ -139,13 +140,55 @@ async def _send_receipt(sender: str, target_timestamp: float) -> None:
     logger.info(f"Sent read receipt for message from {sender}")
 
 
-async def _send_message(message: str, target: str, is_group: bool = False) -> None:
+def _validate_attachments(attachments: list[str] | None) -> list[str] | None:
+    """Validate outbound attachments before any RPC is issued.
+
+    Entries starting with ``data:`` (RFC 2397 data URIs) pass through
+    unchanged. Anything else must be an existing, readable file — ``~`` is
+    expanded and the path is resolved to an absolute path. Raises
+    :class:`SignalError` with a clear message on the first invalid entry, so
+    the tool errors out before any daemon ``send`` is attempted.
+    """
+    if not attachments:
+        return None
+
+    validated: list[str] = []
+    for entry in attachments:
+        if entry.startswith("data:"):
+            validated.append(entry)
+            continue
+
+        path = Path(entry).expanduser()
+        if not path.is_file():
+            raise SignalError(f"Attachment is not an existing file: {entry}")
+        resolved = path.resolve()
+        try:
+            with resolved.open("rb"):
+                pass
+        except OSError as e:
+            raise SignalError(f"Attachment is not readable: {entry} ({e})") from e
+        validated.append(str(resolved))
+
+    return validated
+
+
+async def _send_message(
+    message: str,
+    target: str,
+    is_group: bool = False,
+    attachments: list[str] | None = None,
+) -> None:
     """Send a message to either a user or group via the daemon.
 
-    Raises :class:`SignalCLIError` on failure.
+    ``attachments`` entries must already be validated and resolved (see
+    :func:`_validate_attachments`); they are passed to the daemon as the
+    ``"attachments"`` array. The message text may be empty when attachments
+    are present. Raises :class:`SignalCLIError` on failure.
     """
     target_type = "group" if is_group else "user"
     params: dict[str, Any] = {"message": message}
+    if attachments:
+        params["attachments"] = attachments
     if is_group:
         params["groupId"] = target
     else:
@@ -188,25 +231,39 @@ async def _send_reaction(
 
 @mcp.tool()
 @_log_tool_errors
-async def send_message_to_user(message: str, user_id: str) -> dict[str, str]:
-    """Send a message to a specific user using signal-cli."""
+async def send_message_to_user(
+    message: str, user_id: str, attachments: list[str] | None = None
+) -> dict[str, str]:
+    """Send a message to a specific user using signal-cli.
+
+    ``attachments`` is an optional list of file paths or RFC 2397 ``data:``
+    URIs (``data:<MIME>;filename=<NAME>;base64,<DATA>``). File paths are
+    resolved on the host where the signal-cli daemon runs. ``message`` may be
+    empty when attachments are provided.
+    """
     logger.info(f"Tool called: send_message_to_user for user {user_id}")
     _ensure_trusted(user_id)
-    await _send_message(message, user_id, is_group=False)
+    files = _validate_attachments(attachments)
+    await _send_message(message, user_id, is_group=False, attachments=files)
     return {"message": "Message sent successfully"}
 
 
 @mcp.tool()
 @_log_tool_errors
-async def send_message_to_group(message: str, group_id: str) -> dict[str, str]:
+async def send_message_to_group(
+    message: str, group_id: str, attachments: list[str] | None = None
+) -> dict[str, str]:
     """Send a message to a group using signal-cli.
 
     ``group_id`` may be the group's internal id (the ``group_id`` returned by
-    receive_message) or its display name.
+    receive_message) or its display name. ``attachments`` is an optional list
+    of file paths (resolved on the signal-cli daemon's host) or RFC 2397
+    ``data:`` URIs; ``message`` may be empty when attachments are provided.
     """
     logger.info(f"Tool called: send_message_to_group for group {group_id}")
     gid = await _ensure_trusted_group(group_id)
-    await _send_message(message, gid, is_group=True)
+    files = _validate_attachments(attachments)
+    await _send_message(message, gid, is_group=True, attachments=files)
     return {"message": "Message sent successfully"}
 
 
@@ -270,18 +327,21 @@ async def send_reaction_to_group(
 
 @mcp.tool()
 @_log_tool_errors
-async def send(message: str) -> dict[str, str]:
+async def send(message: str, attachments: list[str] | None = None) -> dict[str, str]:
     """Send a message to the channel owner's phone.
 
     Use this when the user asks to "send a message", "text me", or anything
     about sending to Signal. No phone number needed — it sends to the channel
-    owner's number.
+    owner's number. ``attachments`` is an optional list of file paths
+    (resolved on the signal-cli daemon's host) or RFC 2397 ``data:`` URIs;
+    ``message`` may be empty when attachments are provided.
     """
     logger.info("Tool called: send")
     if not config.user_id:
         raise SignalError("No user_id configured (set --user-id)")
     _ensure_trusted(config.user_id)
-    await _send_message(message, config.user_id, is_group=False)
+    files = _validate_attachments(attachments)
+    await _send_message(message, config.user_id, is_group=False, attachments=files)
     return {"message": "Message sent successfully"}
 
 
