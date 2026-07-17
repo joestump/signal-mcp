@@ -4,9 +4,13 @@ import argparse
 import logging
 import os
 from dataclasses import dataclass, field
+from pathlib import Path
 
 LOG_FORMAT = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 LOG_LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL")
+
+# Default directory scanned for user-defined prompt template files (*.md).
+DEFAULT_PROMPTS_DIR = "~/.config/signal-mcp/prompts"
 
 # Where signal-cli (>= 0.14.6) stores received attachments on disk, keyed by
 # the attachment id (which includes the file extension).
@@ -31,6 +35,11 @@ class SignalConfig:
     trusted_senders: frozenset[str] = field(default_factory=frozenset)
     channel_mode: bool = False
     prefix: str = ""
+    # Directory of user-defined prompt templates (*.md files with YAML
+    # frontmatter). A missing directory simply means no user prompts.
+    prompts_dir: Path = field(
+        default_factory=lambda: Path(DEFAULT_PROMPTS_DIR).expanduser()
+    )
     log_level: str = "INFO"
     # S3-compatible attachment storage. Setting a bucket enables S3 mode.
     # Credentials come exclusively from the standard AWS chain (env vars,
@@ -197,6 +206,13 @@ def parse_args(argv: list[str] | None = None) -> SignalConfig:
         "delivery. (env: SIGNAL_MCP_PREFIX)",
     )
     parser.add_argument(
+        "--prompts-dir",
+        default=os.environ.get("SIGNAL_MCP_PROMPTS_DIR", DEFAULT_PROMPTS_DIR),
+        help="Directory of user-defined prompt template files (*.md with YAML "
+        "frontmatter). A missing directory just means no user prompts. "
+        f"(default: {DEFAULT_PROMPTS_DIR}, env: SIGNAL_MCP_PROMPTS_DIR)",
+    )
+    parser.add_argument(
         "--attachments-dir",
         default=os.environ.get("SIGNAL_MCP_ATTACHMENTS_DIR", DEFAULT_ATTACHMENTS_DIR),
         help="Directory where signal-cli stores received attachment files. "
@@ -292,6 +308,7 @@ def parse_args(argv: list[str] | None = None) -> SignalConfig:
     config.trusted_senders = _load_trusted_senders(args.trusted_senders)
     config.channel_mode = args.channel
     config.prefix = args.prefix
+    config.prompts_dir = Path(args.prompts_dir).expanduser()
     config.log_level = log_level
     config.attachments_dir = os.path.expanduser(args.attachments_dir)
 
