@@ -11,3 +11,7 @@ wheels/
 .history
 .vscode
 .env
+# Coverage artifacts
+.coverage
+.coverage.*
+htmlcov/
