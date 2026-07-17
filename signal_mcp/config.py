@@ -16,6 +16,11 @@ DEFAULT_PROMPTS_DIR = "~/.config/signal-mcp/prompts"
 # the attachment id (which includes the file extension).
 DEFAULT_ATTACHMENTS_DIR = "~/.local/share/signal-cli/attachments"
 
+# Outbound attachment transfer (#18): how local file attachments are handed
+# to the signal-cli daemon.
+ATTACHMENT_TRANSFER_MODES = ("auto", "path", "data-uri")
+DEFAULT_ATTACHMENT_MAX_BYTES = 26214400  # 25 MB
+
 
 @dataclass
 class SignalConfig:
@@ -54,6 +59,13 @@ class SignalConfig:
     attachments_dir: str = field(
         default_factory=lambda: os.path.expanduser(DEFAULT_ATTACHMENTS_DIR)
     )
+    # How outbound file attachments reach the daemon: "path" passes local
+    # file paths (requires a shared filesystem with the daemon), "data-uri"
+    # embeds the file content as an RFC 2397 data URI, and "auto" picks
+    # data-uri when rpc_host is not a loopback address, path otherwise.
+    attachment_transfer: str = "auto"
+    # Largest local file (in bytes) that may be encoded as a data URI.
+    attachment_max_bytes: int = DEFAULT_ATTACHMENT_MAX_BYTES
 
 
 # Global config instance shared by all modules.
@@ -219,6 +231,34 @@ def parse_args(argv: list[str] | None = None) -> SignalConfig:
         f"(default: {DEFAULT_ATTACHMENTS_DIR}, env: SIGNAL_MCP_ATTACHMENTS_DIR)",
     )
     parser.add_argument(
+        "--attachment-transfer",
+        default=os.environ.get("SIGNAL_MCP_ATTACHMENT_TRANSFER", "auto"),
+        help=(
+            "How outbound file attachments are handed to the signal-cli "
+            "daemon: 'path' sends local file paths (requires a shared "
+            "filesystem with the daemon), 'data-uri' embeds file content as "
+            "RFC 2397 data URIs, and 'auto' picks data-uri when --rpc-host "
+            "is not a loopback address, path otherwise. "
+            "(default: auto, env: SIGNAL_MCP_ATTACHMENT_TRANSFER)"
+        ),
+    )
+    parser.add_argument(
+        "--attachment-max-bytes",
+        type=int,
+        default=int(
+            os.environ.get(
+                "SIGNAL_MCP_ATTACHMENT_MAX_BYTES",
+                str(DEFAULT_ATTACHMENT_MAX_BYTES),
+            )
+        ),
+        help=(
+            "Largest local file (in bytes) that may be encoded as a data URI "
+            "when the attachment transfer mode resolves to data-uri. "
+            f"(default: {DEFAULT_ATTACHMENT_MAX_BYTES} = 25 MB, "
+            "env: SIGNAL_MCP_ATTACHMENT_MAX_BYTES)"
+        ),
+    )
+    parser.add_argument(
         "--log-level",
         default=os.environ.get("SIGNAL_MCP_LOG_LEVEL", "INFO"),
         help="Logging verbosity: DEBUG, INFO, WARNING, ERROR, or CRITICAL. "
@@ -299,6 +339,17 @@ def parse_args(argv: list[str] | None = None) -> SignalConfig:
             f"invalid --s3-presign-ttl {args.s3_presign_ttl} "
             "(must be a positive number of seconds)"
         )
+    if args.attachment_transfer not in ATTACHMENT_TRANSFER_MODES:
+        parser.error(
+            f"invalid attachment transfer {args.attachment_transfer!r} "
+            "(set SIGNAL_MCP_ATTACHMENT_TRANSFER to "
+            f"{', '.join(repr(m) for m in ATTACHMENT_TRANSFER_MODES)})"
+        )
+    if args.attachment_max_bytes <= 0:
+        parser.error(
+            f"invalid attachment max bytes {args.attachment_max_bytes!r} "
+            "(--attachment-max-bytes must be a positive integer)"
+        )
 
     config.user_id = args.user_id
     config.transport = args.transport
@@ -311,6 +362,8 @@ def parse_args(argv: list[str] | None = None) -> SignalConfig:
     config.prompts_dir = Path(args.prompts_dir).expanduser()
     config.log_level = log_level
     config.attachments_dir = os.path.expanduser(args.attachments_dir)
+    config.attachment_transfer = args.attachment_transfer
+    config.attachment_max_bytes = args.attachment_max_bytes
 
     # Tri-state path-style: flag/env win when given; otherwise default to
     # path-style whenever a custom endpoint is configured (Garage and MinIO
