@@ -23,6 +23,7 @@ reactions — through a long-running `signal-cli daemon`.
   - [Prefix filtering](#prefix-filtering)
   - [Claude Code channel setup](#claude-code-channel-setup)
 - [Tools](#tools)
+- [Prompts](#prompts)
 - [Development](#development)
 
 ## Features
@@ -387,6 +388,31 @@ after `receive_message` returns. In channel mode this is done automatically.
   the received message).
 
 Returns `{"message": "Read receipt sent"}` on success.
+
+## Prompts
+
+The server ships **two** built-in MCP prompts. Signal renders **no markdown**
+— `*bold*`, `` `code` ``, `_italic_`, and `#` headers all appear as literal
+characters — so these prompts hand clients the plaintext formatting rules on
+demand. In channel mode the same rules are also baked into the server
+instructions automatically, so channel clients get them without asking.
+
+### `signal_style`
+
+Returns the Signal formatting rules as a user-role message: plain text with
+blank lines between sections, emoji, UTF-8 glyphs (bullet •, arrow →,
+middot ·, dash —, ✅ ❌ ⚠️), and bare `https://` URLs (Signal auto-links
+them). Takes no arguments. Useful for non-channel clients and on-demand use
+before composing a message.
+
+### `signal_reply(sender, message)`
+
+Renders a "compose a reply to `sender` following the Signal formatting rules,
+then send it with `send_message_to_user`" template that embeds the received
+message and the formatting rules.
+
+- `sender` *(str, required)* — phone number (E.164) of the message sender.
+- `message` *(str, required)* — the Signal message text being replied to.
 
 ## Development
 
