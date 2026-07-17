@@ -64,6 +64,34 @@ claude --dangerously-load-development-channels server:signal
 
 Send a **Note to Self** on Signal from your phone. Your agent will see it arrive in real time.
 
+## Trusted senders (inbound gating)
+
+Channel mode pushes message text straight into your agent's context, so inbound gating is **deny-by-default**: with no trusted senders configured, only messages whose envelope `source` equals `--user-id` — your own number, e.g. Note to Self — are forwarded. Anything else is dropped with a log line: no notification, no read receipt.
+
+To let other people through, configure the allowlist with the repeatable `--trusted-sender` flag or the comma-separated `SIGNAL_MCP_TRUSTED_SENDERS` environment variable:
+
+```bash
+uv run signal_mcp/main.py --user-id +15551234567 --channel \
+    --trusted-sender +15551234567 \
+    --trusted-sender +15555550101
+```
+
+Or in your MCP config:
+
+```json
+{
+  "env": {
+    "SIGNAL_MCP_TRUSTED_SENDERS": "+15551234567,+15555550101"
+  }
+}
+```
+
+Once configured, the list is exhaustive — include your own number if you still want Note to Self forwarded.
+
+The check always applies to the message **author** (the envelope `source`), never the group id: membership in a group — even an allowlisted one — cannot be used to inject prompts.
+
+In normal (polling) mode the same filter applies to `receive_message`, but only when trusted senders are configured — unconfigured polling is unchanged.
+
 ## Prefix filtering
 
 If you use Note to Self for things other than Claude, set a prefix so only tagged messages are forwarded. The prefix is stripped before delivery:
@@ -115,5 +143,5 @@ Agents have two ways to respond:
 ## Security considerations
 
 - The channel server runs locally and communicates over stdio — no network exposure for the MCP protocol itself.
-- Only forward messages from trusted senders. signal-cli as a linked device receives everything your phone receives.
-- Use **prefix filtering** to limit what reaches Claude, reducing the risk of prompt injection from unexpected messages.
+- signal-cli as a linked device receives everything your phone receives, so inbound messages are gated on the **trusted senders** allowlist (see above). In channel mode this is deny-by-default: with nothing configured, only your own messages (`--user-id`) reach the agent.
+- Use **prefix filtering** on top of sender gating to limit *which* of the trusted messages reach Claude — the prefix filters content, the allowlist filters identity.

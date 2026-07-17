@@ -1,5 +1,6 @@
 """FastMCP tool definitions and send helpers for the Signal MCP server."""
 
+import asyncio
 import functools
 import logging
 from collections.abc import Awaitable, Callable
@@ -8,7 +9,7 @@ from typing import Any, ParamSpec, TypeVar
 
 from mcp.server.fastmcp import FastMCP
 
-from signal_mcp.config import _normalize_recipient, config
+from signal_mcp.config import _normalize_recipient, config, is_trusted_sender
 from signal_mcp.parse import MessageResponse
 from signal_mcp.prompts import register_prompts
 from signal_mcp.rpc import (
@@ -364,17 +365,28 @@ async def receive_message(timeout: float = 60.0) -> MessageResponse:
     local path to the downloaded file, or null when the file is not present
     in the configured attachments directory. An attachment-only message (e.g.
     a bare image) has ``message`` null but ``attachments`` populated.
+
+    When a trusted-senders allowlist is configured, messages from other
+    authors are skipped (with a log line) and the call keeps waiting within
+    the timeout; with no allowlist configured, polling is unfiltered.
     """
     logger.info(f"Tool called: receive_message with timeout {timeout}s")
-    result = await get_client().next_message(timeout)
-    if result is None:
-        logger.info("No message received within timeout")
-        return MessageResponse()
-    logger.info(
-        f"Received message from {result.sender_id}"
-        + (f" in group {result.group_id}" if result.group_id else "")
-    )
-    return result
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
+    while True:
+        remaining = deadline - loop.time()
+        result = await get_client().next_message(remaining) if remaining > 0 else None
+        if result is None:
+            logger.info("No message received within timeout")
+            return MessageResponse()
+        if not is_trusted_sender(result.sender_id):
+            logger.info(f"Dropped message from untrusted sender: {result.sender_id}")
+            continue
+        logger.info(
+            f"Received message from {result.sender_id}"
+            + (f" in group {result.group_id}" if result.group_id else "")
+        )
+        return result
 
 
 @mcp.tool()

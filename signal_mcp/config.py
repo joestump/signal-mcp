@@ -29,6 +29,10 @@ class SignalConfig:
     # server is permitted to message. When empty, enforcement is disabled and
     # every recipient is allowed (opt-in security).
     trusted_recipients: frozenset[str] = field(default_factory=frozenset)
+    # Allowlist of message authors (envelope ``source``) whose inbound
+    # messages may reach the agent. When empty, channel mode denies everyone
+    # but ``user_id`` (deny-by-default), while polling stays ungated.
+    trusted_senders: frozenset[str] = field(default_factory=frozenset)
     channel_mode: bool = False
     prefix: str = ""
     # Directory of user-defined prompt templates (*.md files with YAML
@@ -84,6 +88,46 @@ def _env_tristate(name: str) -> bool | None:
     return raw in ("1", "true", "yes", "on")
 
 
+def _load_trusted_senders(cli_senders: list[str]) -> frozenset[str]:
+    """Build the trusted-sender allowlist from CLI flags and the environment.
+
+    Combines ``--trusted-sender`` flags with the comma-separated
+    ``SIGNAL_MCP_TRUSTED_SENDERS`` env var, normalizing and dropping blanks —
+    the same rules as trusted recipients.
+    """
+    senders = list(cli_senders or [])
+    env_value = os.environ.get("SIGNAL_MCP_TRUSTED_SENDERS", "")
+    senders.extend(env_value.split(","))
+
+    return frozenset(
+        normalized for raw in senders if (normalized := _normalize_recipient(raw))
+    )
+
+
+def is_trusted_sender(sender: str | None) -> bool:
+    """Decide whether an inbound message author may reach the agent.
+
+    The check always applies to the message *author* (the envelope
+    ``source``), never a group id — membership in a group must not grant
+    prompt injection.
+
+    - When trusted senders are configured, only allowlisted authors pass.
+      The list is exhaustive: include your own number if you want your own
+      messages (e.g. Note to Self) through.
+    - When none are configured and channel mode is enabled, only the channel
+      owner (``user_id``) passes — inbound gating is deny-by-default in
+      channel mode.
+    - Otherwise (polling mode with no allowlist) every author passes, so
+      plain polling behavior is unchanged.
+    """
+    normalized = _normalize_recipient(sender or "")
+    if config.trusted_senders:
+        return normalized in config.trusted_senders
+    if config.channel_mode:
+        return bool(normalized) and normalized == _normalize_recipient(config.user_id)
+    return True
+
+
 def configure_logging(level: str) -> None:
     """Configure root logging at the given level name (e.g. ``"INFO"``)."""
     logging.basicConfig(level=getattr(logging, level.upper()), format=LOG_FORMAT)
@@ -129,6 +173,20 @@ def parse_args(argv: list[str] | None = None) -> SignalConfig:
             "SIGNAL_MCP_TRUSTED_RECIPIENTS env var (comma-separated) are added "
             "too. If no trusted recipients are configured, every recipient is "
             "permitted."
+        ),
+    )
+    parser.add_argument(
+        "--trusted-sender",
+        action="append",
+        default=[],
+        dest="trusted_senders",
+        metavar="SENDER",
+        help=(
+            "Phone number (envelope source) whose inbound messages may reach "
+            "the agent. Repeat the flag to allow several. Values from the "
+            "SIGNAL_MCP_TRUSTED_SENDERS env var (comma-separated) are added "
+            "too. In channel mode, when no trusted senders are configured, "
+            "only messages from --user-id are forwarded (deny-by-default)."
         ),
     )
     parser.add_argument(
@@ -247,6 +305,7 @@ def parse_args(argv: list[str] | None = None) -> SignalConfig:
     config.rpc_host = args.rpc_host
     config.rpc_port = args.rpc_port
     config.trusted_recipients = _load_trusted_recipients(args.trusted_recipients)
+    config.trusted_senders = _load_trusted_senders(args.trusted_senders)
     config.channel_mode = args.channel
     config.prefix = args.prefix
     config.prompts_dir = Path(args.prompts_dir).expanduser()
