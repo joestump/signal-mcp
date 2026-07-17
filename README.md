@@ -125,7 +125,7 @@ set. All variables use the `SIGNAL_MCP_` prefix to avoid collisions.
 | `--prompts-dir` | `SIGNAL_MCP_PROMPTS_DIR` | `~/.config/signal-mcp/prompts` | Directory of user-defined prompt template files (`*.md`). A missing directory just means no user prompts. See [User-defined prompts](#user-defined-prompts). |
 | `--attachments-dir` | `SIGNAL_MCP_ATTACHMENTS_DIR` | `~/.local/share/signal-cli/attachments` | Directory where signal-cli stores received attachment files. See [Inbound attachments](#inbound-attachments). |
 | `--attachment-transfer` | `SIGNAL_MCP_ATTACHMENT_TRANSFER` | `auto` | How outbound file attachments reach the daemon: `path`, `data-uri`, or `auto`. See [Attachments](#attachments). |
-| `--attachment-max-bytes` | `SIGNAL_MCP_ATTACHMENT_MAX_BYTES` | `26214400` (25 MB) | Largest local file that may be encoded as a data URI. See [Attachments](#attachments). |
+| `--attachment-max-bytes` | `SIGNAL_MCP_ATTACHMENT_MAX_BYTES` | `26214400` (25 MB) | Largest attachment accepted: caps a data-URI-encoded file and an http(s) URL download. See [Attachments](#attachments). |
 | `--log-level` | `SIGNAL_MCP_LOG_LEVEL` | `INFO` | Logging verbosity: `DEBUG`, `INFO`, `WARNING`, `ERROR`, or `CRITICAL`. |
 
 ### Restricting recipients (trusted recipients)
@@ -471,13 +471,27 @@ Send a message to a group.
 
 ### Attachments
 
-Each entry in an `attachments` list is either:
+Each entry in an `attachments` list is one of:
 
 - a **file path** — `~` is expanded and the path is resolved to an absolute
   path. The file must exist and be readable, or the tool errors out before
-  anything is sent; or
+  anything is sent;
+- an **`http(s)` URL** — the server downloads it to a temp file (streaming,
+  with a connect/read timeout) and hands the daemon that path, or embeds it as
+  a data URI in data-URI mode. The filename comes from `Content-Disposition`
+  or the URL path, the MIME type from the response `Content-Type`; the download
+  is capped by `--attachment-max-bytes` and the temp file is removed after the
+  send. Only `http` and `https` are accepted — any other scheme is rejected.
+  This lets a harness that doesn't share a filesystem with the server send
+  files (e.g. presigned URLs from its own bucket); or
 - an **RFC 2397 data URI** — `data:<MIME>;filename=<NAME>;base64,<DATA>`,
   passed through to signal-cli unchanged in **every** transfer mode.
+
+> **SSRF note.** For URL entries the server fetches whatever URL the model
+> supplies, from the server's own network. Rely on the trusted-recipients /
+> trusted-senders posture to bound who can drive the model, and on network
+> policy (egress firewall, no link-local/metadata endpoints) to bound where the
+> server can reach. Only `http`/`https` schemes are allowed.
 
 #### Transfer modes (path vs data URI)
 
@@ -500,11 +514,12 @@ mode.
 **Size cap:** encoding embeds the whole file in the JSON-RPC request, so
 data-URI transfer is capped at `--attachment-max-bytes` /
 `SIGNAL_MCP_ATTACHMENT_MAX_BYTES` (default `26214400` = 25 MB). A file over
-the cap fails with an actionable error *before* any RPC is issued. The cap
-only applies to data-URI encoding — `path` mode hands the daemon a path and
-never reads the file. Caller-supplied `data:` URIs bypass
-`--attachment-max-bytes` entirely, in every mode: they are forwarded as-is,
-whatever their size.
+the cap fails with an actionable error *before* any RPC is issued. The same
+cap bounds `http(s)` URL downloads (the transfer aborts once it is exceeded),
+in every transfer mode. It does **not** apply to a local file in `path` mode
+(the daemon opens the path and the file is never read here). Caller-supplied
+`data:` URIs bypass `--attachment-max-bytes` entirely, in every mode: they are
+forwarded as-is, whatever their size.
 
 **Remote daemon guidance:** if your daemon runs on another host (e.g.
 `--rpc-host signal.example.com`), the default `auto` mode already does the
