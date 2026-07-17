@@ -8,6 +8,10 @@ from dataclasses import dataclass, field
 LOG_FORMAT = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 LOG_LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL")
 
+# Where signal-cli (>= 0.14.6) stores received attachments on disk, keyed by
+# the attachment id (which includes the file extension).
+DEFAULT_ATTACHMENTS_DIR = "~/.local/share/signal-cli/attachments"
+
 
 @dataclass
 class SignalConfig:
@@ -33,6 +37,10 @@ class SignalConfig:
     s3_prefix: str = "signal-mcp/"
     s3_presign_ttl: int = 3600
     s3_force_path_style: bool = False
+    # Directory where signal-cli stores received attachment files.
+    attachments_dir: str = field(
+        default_factory=lambda: os.path.expanduser(DEFAULT_ATTACHMENTS_DIR)
+    )
 
 
 # Global config instance shared by all modules.
@@ -131,6 +139,12 @@ def parse_args(argv: list[str] | None = None) -> SignalConfig:
         "delivery. (env: SIGNAL_MCP_PREFIX)",
     )
     parser.add_argument(
+        "--attachments-dir",
+        default=os.environ.get("SIGNAL_MCP_ATTACHMENTS_DIR", DEFAULT_ATTACHMENTS_DIR),
+        help="Directory where signal-cli stores received attachment files. "
+        f"(default: {DEFAULT_ATTACHMENTS_DIR}, env: SIGNAL_MCP_ATTACHMENTS_DIR)",
+    )
+    parser.add_argument(
         "--log-level",
         default=os.environ.get("SIGNAL_MCP_LOG_LEVEL", "INFO"),
         help="Logging verbosity: DEBUG, INFO, WARNING, ERROR, or CRITICAL. "
@@ -220,6 +234,7 @@ def parse_args(argv: list[str] | None = None) -> SignalConfig:
     config.channel_mode = args.channel
     config.prefix = args.prefix
     config.log_level = log_level
+    config.attachments_dir = os.path.expanduser(args.attachments_dir)
 
     # Tri-state path-style: flag/env win when given; otherwise default to
     # path-style whenever a custom endpoint is configured (Garage and MinIO

@@ -117,6 +117,7 @@ set. All variables use the `SIGNAL_MCP_` prefix to avoid collisions.
 | `--rpc-host` | `SIGNAL_MCP_RPC_HOST` | `127.0.0.1` | Host of the signal-cli daemon JSON-RPC interface. |
 | `--rpc-port` | `SIGNAL_MCP_RPC_PORT` | `7583` | Port of the signal-cli daemon JSON-RPC interface. |
 | `--trusted-recipient` | `SIGNAL_MCP_TRUSTED_RECIPIENTS` | *(none)* | Allowlist of recipients the server may message (comma-separated in the env var). See below. |
+| `--attachments-dir` | `SIGNAL_MCP_ATTACHMENTS_DIR` | `~/.local/share/signal-cli/attachments` | Directory where signal-cli stores received attachment files. See [Inbound attachments](#inbound-attachments). |
 | `--log-level` | `SIGNAL_MCP_LOG_LEVEL` | `INFO` | Logging verbosity: `DEBUG`, `INFO`, `WARNING`, `ERROR`, or `CRITICAL`. |
 
 ### Restricting recipients (trusted recipients)
@@ -414,9 +415,9 @@ except `group_id` (id or display name) identifies the group.
 
 ### `receive_message(timeout=60)`
 
-Wait up to `timeout` seconds for the next actionable message (text body or
-emoji reaction) and return it. Messages that arrived while the daemon was
-streaming are queued, so back-to-back calls won't drop anything.
+Wait up to `timeout` seconds for the next actionable message (text body,
+attachments, or emoji reaction) and return it. Messages that arrived while the
+daemon was streaming are queued, so back-to-back calls won't drop anything.
 
 - `timeout` *(float, default `60`)* — seconds to wait.
 
@@ -431,7 +432,8 @@ can tell the two apart:
   "sender_name": "Alice Example", // sender's profile/contact name, if known
   "group_id": "GROUP_ID==",       // group id if it was a group message, else null
   "timestamp": 1744185565466,     // ms; pass back as target_timestamp to react
-  "reaction": null                // or a Reaction object (see below)
+  "reaction": null,               // or a Reaction object (see below)
+  "attachments": []               // Attachment objects (see below), if any
 }
 ```
 
@@ -453,6 +455,31 @@ When the message is a reaction, `reaction` holds:
 On timeout (or for non-actionable traffic like delivery/read receipts and
 typing indicators) an empty `MessageResponse` is returned — all fields `null`,
 which is **not** an error.
+
+#### Inbound attachments
+
+Messages carrying files (images, documents, voice notes, …) list them in
+`attachments`. An **attachment-only** message — e.g. a bare photo with no
+caption — still produces a result: `message` is `null` and `attachments` is
+populated. Each attachment looks like:
+
+```jsonc
+{
+  "id": "0oHirH8e8bm9oPM0NJ3B.png",    // signal-cli's stored file name
+  "content_type": "image/png",         // MIME type
+  "filename": "photo.png",             // sender's original name, may be null
+  "size": 12345,                       // bytes
+  "path": "/home/you/.local/share/signal-cli/attachments/0oHirH8e8bm9oPM0NJ3B.png"
+}
+```
+
+signal-cli (0.14.6+) downloads attachments into its attachments directory,
+storing each file under the attachment `id` (which includes the extension).
+The server resolves `path` against that directory — configurable with
+`--attachments-dir` / `SIGNAL_MCP_ATTACHMENTS_DIR` (default
+`~/.local/share/signal-cli/attachments`). When the file is not on disk (not
+yet downloaded, already cleaned up, or a non-default storage location),
+`path` is `null` but the metadata is still returned.
 
 ### `mark_read(sender, target_timestamp)`
 

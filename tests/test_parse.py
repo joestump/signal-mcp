@@ -2,7 +2,13 @@ import asyncio
 import os
 
 from signal_mcp import rpc
-from signal_mcp.parse import MessageResponse, Reaction, _envelope_to_response
+from signal_mcp.config import config
+from signal_mcp.parse import (
+    Attachment,
+    MessageResponse,
+    Reaction,
+    _envelope_to_response,
+)
 from signal_mcp.tools import _resolve_group, _send_message, _send_reaction
 
 # Self number used to build "Note to Self" / sync fixtures. Sourced from an env
@@ -139,6 +145,79 @@ SYNC_REACTION_REMOVE = _envelope(
     },
 )
 
+# Attachment metadata as signal-cli 0.14.6 reports it: `id` is the name the
+# file is stored under on disk (WITH extension), `filename` is the sender's
+# original file name.
+IMAGE_ID = "0oHirH8e8bm9oPM0NJ3B.png"
+IMAGE_ATTACHMENT = {
+    "contentType": "image/png",
+    "filename": "photo.png",
+    "id": IMAGE_ID,
+    "size": 12345,
+}
+
+
+def _image_with_caption() -> dict:
+    """A direct message carrying both a text caption and an image."""
+    return _envelope(
+        ACCOUNT,
+        source=OTHER,
+        sourceNumber=OTHER,
+        sourceName="Bob Sagat",
+        sourceDevice=2,
+        timestamp=1744185590000,
+        dataMessage={
+            "timestamp": 1744185590000,
+            "message": "look at this",
+            "groupInfo": None,
+            "reaction": None,
+            "attachments": [dict(IMAGE_ATTACHMENT)],
+        },
+    )
+
+
+def _attachment_only() -> dict:
+    """A bare image with no text body — must still produce a response."""
+    return _envelope(
+        ACCOUNT,
+        source=OTHER,
+        sourceNumber=OTHER,
+        sourceName="Bob Sagat",
+        sourceDevice=2,
+        timestamp=1744185600000,
+        dataMessage={
+            "timestamp": 1744185600000,
+            "message": None,
+            "groupInfo": None,
+            "reaction": None,
+            "attachments": [dict(IMAGE_ATTACHMENT)],
+        },
+    )
+
+
+def _synced_attachment() -> dict:
+    """An attachment sent from another linked device — arrives as
+    syncMessage.sentMessage.attachments, not a dataMessage."""
+    return _envelope(
+        SELF,
+        source=SELF,
+        sourceNumber=SELF,
+        sourceUuid=SELF_UUID,
+        sourceName="Tester",
+        sourceDevice=1,
+        timestamp=1782555400000,
+        syncMessage={
+            "sentMessage": {
+                "destination": SELF,
+                "timestamp": 1782555400000,
+                "message": None,
+                "reaction": None,
+                "attachments": [dict(IMAGE_ATTACHMENT)],
+            }
+        },
+    )
+
+
 # A delivery receipt — should be ignored entirely.
 RECEIPT = _envelope(
     ACCOUNT,
@@ -216,6 +295,105 @@ def test_parse_sync_reaction_remove():
 def test_receipts_are_ignored():
     assert _parse(RECEIPT) is None
     assert _parse({}) is None
+
+
+def test_parse_image_with_caption(tmp_path):
+    """An image with a caption keeps the text body and resolves the file path."""
+    stored = tmp_path / IMAGE_ID
+    stored.write_bytes(b"\x89PNG fake")
+
+    result = _envelope_to_response(_image_with_caption(), str(tmp_path))
+    assert result == MessageResponse(
+        message="look at this",
+        sender_id=OTHER,
+        sender_name="Bob Sagat",
+        group_id=None,
+        timestamp=1744185590000,
+        attachments=[
+            Attachment(
+                id=IMAGE_ID,
+                content_type="image/png",
+                filename="photo.png",
+                size=12345,
+                path=str(stored),
+            )
+        ],
+    )
+
+
+def test_parse_attachment_only_message(tmp_path):
+    """An envelope with attachments but no text body still yields a response."""
+    stored = tmp_path / IMAGE_ID
+    stored.write_bytes(b"\x89PNG fake")
+
+    result = _envelope_to_response(_attachment_only(), str(tmp_path))
+    assert result is not None
+    assert result.message is None
+    assert result.sender_id == OTHER
+    assert result.timestamp == 1744185600000
+    assert result.attachments == [
+        Attachment(
+            id=IMAGE_ID,
+            content_type="image/png",
+            filename="photo.png",
+            size=12345,
+            path=str(stored),
+        )
+    ]
+
+
+def test_parse_synced_attachment(tmp_path):
+    """Attachments sent from another linked device arrive on
+    syncMessage.sentMessage and must be parsed the same way."""
+    stored = tmp_path / IMAGE_ID
+    stored.write_bytes(b"\x89PNG fake")
+
+    result = _envelope_to_response(_synced_attachment(), str(tmp_path))
+    assert result is not None
+    assert result.message is None
+    assert result.sender_name == "Tester"
+    assert result.attachments == [
+        Attachment(
+            id=IMAGE_ID,
+            content_type="image/png",
+            filename="photo.png",
+            size=12345,
+            path=str(stored),
+        )
+    ]
+
+
+def test_parse_attachment_missing_file_keeps_metadata(tmp_path):
+    """When the stored file is absent, path is None but metadata survives."""
+    result = _envelope_to_response(_image_with_caption(), str(tmp_path))
+    assert result is not None
+    assert result.message == "look at this"
+    assert result.attachments == [
+        Attachment(
+            id=IMAGE_ID,
+            content_type="image/png",
+            filename="photo.png",
+            size=12345,
+            path=None,
+        )
+    ]
+
+
+def test_parse_attachments_defaults_to_configured_dir(tmp_path, monkeypatch):
+    """Without an explicit dir, files are resolved via config.attachments_dir."""
+    stored = tmp_path / IMAGE_ID
+    stored.write_bytes(b"\x89PNG fake")
+    monkeypatch.setattr(config, "attachments_dir", str(tmp_path))
+
+    result = _parse(_attachment_only())
+    assert result is not None
+    assert result.attachments[0].path == str(stored)
+
+
+def test_messages_without_attachments_have_empty_list():
+    result = _parse(DIRECT_MESSAGE)
+    assert result is not None
+    assert result.attachments == []
 
 
 def test_send_message_builds_params(monkeypatch):

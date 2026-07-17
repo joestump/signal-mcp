@@ -1,8 +1,11 @@
 """Parsing of signal-cli envelopes into structured message responses."""
 
 import logging
-from dataclasses import dataclass
+import os
+from dataclasses import dataclass, field
 from typing import Any
+
+from signal_mcp.config import config
 
 logger = logging.getLogger(__name__)
 
@@ -15,6 +18,25 @@ class Reaction:
     target_author: str | None = None
     target_timestamp: int | None = None
     is_remove: bool = False
+
+
+@dataclass
+class Attachment:
+    """A file attachment on a received message.
+
+    ``id`` is signal-cli's stored file name (signal-cli >= 0.14.6 stores it
+    *with* the extension, e.g. ``0oHirH8e8bm9oPM0NJ3B.png``). ``filename`` is
+    the sender's original file name, which may be ``None``. ``path`` is the
+    absolute local path to the file inside the configured attachments
+    directory, or ``None`` when the file does not exist on disk (the metadata
+    is kept either way).
+    """
+
+    id: str | None = None
+    content_type: str | None = None
+    filename: str | None = None
+    size: int | None = None
+    path: str | None = None
 
 
 @dataclass
@@ -36,16 +58,55 @@ class MessageResponse:
     # to react to this message.
     timestamp: int | None = None
     reaction: Reaction | None = None
+    # File attachments on the message; empty when there are none.
+    attachments: list[Attachment] = field(default_factory=list)
 
 
-def _envelope_to_response(payload: dict[str, Any]) -> MessageResponse | None:
+def _parse_attachments(raw: Any, attachments_dir: str) -> list[Attachment]:
+    """Parse the ``attachments[]`` array of a signal-cli message.
+
+    Each entry looks like ``{"contentType": "image/jpeg", "filename":
+    "photo.jpg", "id": "<stored-file-name>", "size": 12345, ...}``. The ``id``
+    is the file name signal-cli stored the attachment under inside
+    ``attachments_dir``; ``path`` is resolved to that file's absolute path only
+    when it actually exists on disk, and left ``None`` otherwise.
+    """
+    attachments: list[Attachment] = []
+    for item in raw or []:
+        if not isinstance(item, dict):
+            continue
+        attachment_id = item.get("id")
+        path: str | None = None
+        if attachment_id:
+            candidate = os.path.join(attachments_dir, str(attachment_id))
+            if os.path.isfile(candidate):
+                path = os.path.abspath(candidate)
+        attachments.append(
+            Attachment(
+                id=attachment_id,
+                content_type=item.get("contentType"),
+                filename=item.get("filename"),
+                size=item.get("size"),
+                path=path,
+            )
+        )
+    return attachments
+
+
+def _envelope_to_response(
+    payload: dict[str, Any], attachments_dir: str | None = None
+) -> MessageResponse | None:
     """Turn one signal-cli envelope into a ``MessageResponse``.
 
     ``payload`` is a single ``{"envelope": {...}, "account": ...}`` object — the
     ``params`` of a JSON-RPC ``receive`` notification (identical to one line of
     ``signal-cli --output=json receive``). Returns ``None`` for envelopes that
     carry nothing actionable (delivery/read receipts, typing indicators, empty
-    sync messages).
+    sync messages). Messages with attachments but no text body *are*
+    actionable and produce a response.
+
+    ``attachments_dir`` overrides where attachment files are looked up on
+    disk; it defaults to the configured ``config.attachments_dir``.
 
     JSON is required because signal-cli's plain-text output collapses a synced
     reaction (e.g. reacting to a "Note to Self" message) down to a bare
@@ -89,17 +150,24 @@ def _envelope_to_response(payload: dict[str, Any]) -> MessageResponse | None:
             ),
         )
 
+    if attachments_dir is None:
+        attachments_dir = config.attachments_dir
+    attachments = _parse_attachments(content.get("attachments"), attachments_dir)
+
     body = content.get("message")
-    if body:
+    if body or attachments:
         logger.info(
-            f"Parsed message from {sender}" + (f" in group {group}" if group else "")
+            f"Parsed message from {sender}"
+            + (f" in group {group}" if group else "")
+            + (f" with {len(attachments)} attachment(s)" if attachments else "")
         )
         return MessageResponse(
-            message=body,
+            message=body or None,
             sender_id=sender,
             sender_name=sender_name,
             group_id=group,
             timestamp=timestamp,
+            attachments=attachments,
         )
 
     return None
