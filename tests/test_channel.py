@@ -6,9 +6,14 @@ from unittest.mock import patch
 from mcp.types import JSONRPCNotification
 
 from signal_mcp import rpc
-from signal_mcp.channel import _forward_channel_messages, _strip_prefix
+from signal_mcp.channel import (
+    _attachment_line,
+    _format_size,
+    _forward_channel_messages,
+    _strip_prefix,
+)
 from signal_mcp.config import config
-from signal_mcp.parse import MessageResponse, Reaction
+from signal_mcp.parse import Attachment, MessageResponse, Reaction
 
 
 class FakeWriteStream:
@@ -54,6 +59,36 @@ def _text_msg(
         sender_name=sender_name,
         group_id=group,
         timestamp=timestamp,
+    )
+
+
+def _attachment(
+    path="/tmp/attachments/abc123.png",
+    content_type="image/png",
+    filename="photo.png",
+    attachment_id="abc123.png",
+    size=250880,
+):
+    return Attachment(
+        id=attachment_id,
+        content_type=content_type,
+        filename=filename,
+        size=size,
+        path=path,
+    )
+
+
+def _attachment_msg(
+    text=None,
+    attachments=None,
+    sender="+1234",
+    timestamp=1744185565466,
+):
+    return MessageResponse(
+        message=text,
+        sender_id=sender,
+        timestamp=timestamp,
+        attachments=attachments if attachments is not None else [_attachment()],
     )
 
 
@@ -220,3 +255,148 @@ def test_auto_mark_read_skipped_for_filtered_messages():
     )
     receipt_calls = [c for c in fake.calls if c[0] == "sendReceipt"]
     assert len(receipt_calls) == 0
+
+
+# --- attachments -------------------------------------------------------------
+
+
+def test_format_size():
+    assert _format_size(None) == "unknown size"
+    assert _format_size(0) == "0 B"
+    assert _format_size(512) == "512 B"
+    assert _format_size(1536) == "1.5 KB"
+    assert _format_size(250880) == "245 KB"
+    assert _format_size(5 * 1024 * 1024) == "5 MB"
+
+
+def test_attachment_line_variants():
+    """Path form when resolved; filename/id fallback + note when missing."""
+    resolved = _attachment()
+    assert _attachment_line(resolved) == (
+        "[attachment: /tmp/attachments/abc123.png (image/png, 245 KB)]"
+    )
+    missing = _attachment(path=None)
+    assert _attachment_line(missing) == (
+        "[attachment: photo.png (image/png, 245 KB) — file not available locally]"
+    )
+    missing_no_name = _attachment(path=None, filename=None)
+    assert _attachment_line(missing_no_name) == (
+        "[attachment: abc123.png (image/png, 245 KB) — file not available locally]"
+    )
+
+
+def test_forwards_image_with_caption():
+    """Image + caption: content is the caption plus one annotation line."""
+    sent, _ = _run_forwarder([_attachment_msg(text="look at this")])
+    assert len(sent) == 1
+    assert sent[0].root.params["content"] == (
+        "look at this\n[attachment: /tmp/attachments/abc123.png (image/png, 245 KB)]"
+    )
+
+
+def test_forwards_attachment_only_message():
+    """A message with attachments but no text forwards as annotation only."""
+    sent, _ = _run_forwarder([_attachment_msg()])
+    assert len(sent) == 1
+    assert sent[0].root.params["content"] == (
+        "[attachment: /tmp/attachments/abc123.png (image/png, 245 KB)]"
+    )
+
+
+def test_forwards_multiple_attachments_one_line_each():
+    """Every attachment contributes its own annotation line."""
+    sent, _ = _run_forwarder(
+        [
+            _attachment_msg(
+                text="two files",
+                attachments=[
+                    _attachment(),
+                    _attachment(
+                        path="/tmp/attachments/doc.pdf",
+                        content_type="application/pdf",
+                        filename="doc.pdf",
+                        attachment_id="doc.pdf",
+                        size=1536,
+                    ),
+                ],
+            )
+        ]
+    )
+    assert len(sent) == 1
+    assert sent[0].root.params["content"] == (
+        "two files\n"
+        "[attachment: /tmp/attachments/abc123.png (image/png, 245 KB)]\n"
+        "[attachment: /tmp/attachments/doc.pdf (application/pdf, 1.5 KB)]"
+    )
+
+
+def test_forwards_attachment_without_local_file():
+    """path=None uses the no-path annotation form (metadata only)."""
+    sent, _ = _run_forwarder([_attachment_msg(attachments=[_attachment(path=None)])])
+    assert len(sent) == 1
+    assert sent[0].root.params["content"] == (
+        "[attachment: photo.png (image/png, 245 KB) — file not available locally]"
+    )
+
+
+def test_prefix_drops_attachment_only_message():
+    """With a prefix configured, attachment-only messages fail closed."""
+    sent, fake = _run_forwarder([_attachment_msg()], prefix="cc")
+    assert sent == []
+    assert [c for c in fake.calls if c[0] == "sendReceipt"] == []
+
+
+def test_prefix_applies_to_caption_of_attachment_message():
+    """The prefix gates on the caption text; annotation lines are appended."""
+    sent, _ = _run_forwarder(
+        [
+            _attachment_msg(text="cc check this out"),
+            _attachment_msg(text="not for claude"),
+        ],
+        prefix="cc",
+    )
+    assert len(sent) == 1
+    assert sent[0].root.params["content"] == (
+        "check this out\n[attachment: /tmp/attachments/abc123.png (image/png, 245 KB)]"
+    )
+
+
+def test_reactions_still_skipped_with_attachment_support():
+    """Reactions are never forwarded, even now that empty text can forward."""
+    reaction = MessageResponse(
+        sender_id="+1234",
+        reaction=Reaction(
+            emoji="\U0001f44d", target_author="+1234", target_timestamp=1
+        ),
+    )
+    truly_empty = MessageResponse(sender_id="+1234", timestamp=1)
+    sent, fake = _run_forwarder([reaction, truly_empty])
+    assert sent == []
+    assert [c for c in fake.calls if c[0] == "sendReceipt"] == []
+
+
+def test_receipt_sent_for_forwarded_attachment_message():
+    """Forwarded attachment-only messages still trigger a read receipt."""
+    ts = 1744185565466
+    sent, fake = _run_forwarder([_attachment_msg(sender="+15551234567", timestamp=ts)])
+    assert len(sent) == 1
+    receipt_calls = [c for c in fake.calls if c[0] == "sendReceipt"]
+    assert len(receipt_calls) == 1
+    _, params = receipt_calls[0]
+    assert params["recipient"] == ["+15551234567"]
+    assert params["targetTimestamp"] == ts
+    assert params["type"] == "read"
+
+
+def test_untrusted_sender_dropped_before_attachment_handling(monkeypatch):
+    """The trusted-sender gate runs first: untrusted attachment messages are
+    dropped with no notification and no read receipt."""
+    monkeypatch.setattr(config, "trusted_senders", frozenset({"+15550001111"}))
+    sent, fake = _run_forwarder(
+        [
+            _attachment_msg(sender="+19995550000"),
+            _attachment_msg(text="cc hi", sender="+19995550000"),
+        ]
+    )
+    assert sent == []
+    assert [c for c in fake.calls if c[0] == "sendReceipt"] == []

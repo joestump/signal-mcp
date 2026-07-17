@@ -15,6 +15,7 @@ from mcp.server.stdio import stdio_server
 from mcp.types import JSONRPCMessage, JSONRPCNotification
 
 from signal_mcp.config import config, is_trusted_sender
+from signal_mcp.parse import Attachment
 from signal_mcp.prompts import SIGNAL_FORMATTING_RULES
 from signal_mcp.rpc import SignalCLIError, get_client
 from signal_mcp.tools import _send_receipt, mcp
@@ -28,6 +29,10 @@ via Signal, and you can message them back.
 
 Inbound messages from Signal arrive as <channel source="signal" sender="..." \
 sender_name="..." group="...">. The body text is the content.
+Messages may carry file attachments, delivered as annotation lines in the
+body like [attachment: /path/to/file (image/jpeg, 245 KB)]. The path is a
+local file — open it with your Read tool (images render natively). A line
+noting "file not available locally" means only the metadata is known.
 Use send_message_to_user with the sender attribute as user_id to reply.
 Use send to proactively message the user's phone (no phone number needed).
 Always reply to acknowledge inbound messages, even if briefly.
@@ -35,6 +40,45 @@ Always reply to acknowledge inbound messages, even if briefly.
 """
     + SIGNAL_FORMATTING_RULES
 )
+
+_SIZE_UNITS = ("B", "KB", "MB", "GB", "TB")
+
+
+def _format_size(size: int | None) -> str:
+    """Format a byte count human-readably (e.g. ``245 KB``).
+
+    Uses 1024-based units, trims trailing zeros (``1.5 KB``, not ``1.50 KB``),
+    and returns ``"unknown size"`` when the size is not known.
+    """
+    if size is None:
+        return "unknown size"
+    value = float(size)
+    index = 0
+    while value >= 1024 and index < len(_SIZE_UNITS) - 1:
+        value /= 1024
+        index += 1
+    formatted = f"{value:.1f}".rstrip("0").rstrip(".")
+    return f"{formatted} {_SIZE_UNITS[index]}"
+
+
+def _attachment_line(attachment: Attachment) -> str:
+    """Render one attachment as a bracketed annotation line for the channel.
+
+    When the file resolved on disk the line carries its local path::
+
+        [attachment: /path/to/file (image/png, 245 KB)]
+
+    When ``path`` is ``None`` (file missing locally) the line falls back to
+    the sender's original filename or the attachment id, and says so::
+
+        [attachment: photo.png (image/png, 245 KB) — file not available locally]
+    """
+    content_type = attachment.content_type or "unknown type"
+    size = _format_size(attachment.size)
+    if attachment.path:
+        return f"[attachment: {attachment.path} ({content_type}, {size})]"
+    name = attachment.filename or attachment.id or "unknown"
+    return f"[attachment: {name} ({content_type}, {size}) — file not available locally]"
 
 
 def _strip_prefix(text: str, prefix: str) -> str | None:
@@ -77,13 +121,12 @@ async def _forward_channel_messages(write_stream: Any) -> None:
             msg = await rpc_client.next_message(timeout=3600)
             if msg is None:
                 continue
-            # Only forward text messages, not reactions.
-            if not msg.message:
-                continue
 
-            # Trusted-sender gating — the check applies to the message
-            # author (envelope source), never the group id. Untrusted
-            # senders are dropped: no notification, no read receipt.
+            # Trusted-sender gating runs FIRST — before attachment handling,
+            # prefix filtering, and receipts. The check applies to the
+            # message author (envelope source), never the group id.
+            # Untrusted senders are dropped: no notification, no read
+            # receipt.
             if not is_trusted_sender(msg.sender_id):
                 logger.info(
                     "Channel forwarder: dropped message from "
@@ -91,16 +134,31 @@ async def _forward_channel_messages(write_stream: Any) -> None:
                 )
                 continue
 
-            text = msg.message
+            # Skip reactions and truly-empty messages. A message with text
+            # OR attachments (including attachment-only messages) forwards.
+            if msg.reaction is not None or (not msg.message and not msg.attachments):
+                continue
 
-            # Prefix filtering — if configured, only forward messages that
-            # start with the prefix (on a word boundary). The prefix is
-            # stripped before delivery.
+            text = msg.message or ""
+
+            # Prefix filtering — if configured, only forward messages whose
+            # text starts with the prefix (on a word boundary). The prefix
+            # is stripped before delivery. The prefix applies to the text
+            # portion only: an attachment-only message has no text to
+            # match, so it is dropped (fail closed).
             if config.prefix:
+                if not msg.message:
+                    continue
                 remainder = _strip_prefix(text, config.prefix)
                 if remainder is None:
                     continue
                 text = remainder
+
+            # Each attachment contributes one annotation line; for
+            # attachment-only messages the content is just those lines.
+            content_parts = [text] if text else []
+            content_parts.extend(_attachment_line(a) for a in msg.attachments)
+            content = "\n".join(content_parts)
 
             meta: dict[str, str] = {"sender": msg.sender_id or ""}
             if msg.sender_name:
@@ -112,7 +170,7 @@ async def _forward_channel_messages(write_stream: Any) -> None:
                 root=JSONRPCNotification(
                     jsonrpc="2.0",
                     method="notifications/claude/channel",
-                    params={"content": text, "meta": meta},
+                    params={"content": content, "meta": meta},
                 )
             )
             await write_stream.send(notification)
