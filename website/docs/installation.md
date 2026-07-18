@@ -32,17 +32,33 @@ signal-cli will print a phone number to use for `--account` going forward.
 
 ## Install Signal MCP
 
-```bash
-git clone https://github.com/joestump/signal-mcp.git
-cd signal-mcp
-uv pip install -e .
-```
-
-Or with pip:
+No clone required — install straight from GitHub with `uv`. This puts a
+`signal-mcp` command on your `PATH`:
 
 ```bash
-pip install -e .
+uv tool install git+https://github.com/joestump/signal-mcp
 ```
+
+Upgrade later (it tracks `main`) with:
+
+```bash
+uv tool upgrade signal-mcp
+```
+
+For S3 attachment offloading (see [Configuration](configuration)), install the `s3` extra:
+
+```bash
+uv tool install "signal-mcp[s3] @ git+https://github.com/joestump/signal-mcp"
+```
+
+:::tip Zero-install
+Don't want a persistent install? `uvx` builds and runs it straight from GitHub
+into a cache — this is the form used in the Claude Code config below:
+
+```bash
+uvx --from git+https://github.com/joestump/signal-mcp signal-mcp --operator YOUR_PHONE_NUMBER
+```
+:::
 
 ## Start the daemon
 
@@ -61,15 +77,30 @@ Run the daemon under a supervisor (launchd on macOS, systemd on Linux) so it sta
 
 ### With Claude Code
 
-Add to your `.mcp.json` or `~/.claude.json`:
+Add to your `.mcp.json` or `~/.claude.json`. If you ran `uv tool install`, point
+`command` at the installed `signal-mcp`:
 
 ```json
 {
   "mcpServers": {
     "signal": {
       "type": "stdio",
-      "command": "uv",
-      "args": ["run", "--directory", "/path/to/signal-mcp", "python", "signal_mcp/main.py", "--operator", "+15551234567", "--transport", "stdio"]
+      "command": "signal-mcp",
+      "args": ["--operator", "+15551234567", "--transport", "stdio"]
+    }
+  }
+}
+```
+
+Or skip the install entirely and let `uvx` fetch it from GitHub on launch:
+
+```json
+{
+  "mcpServers": {
+    "signal": {
+      "type": "stdio",
+      "command": "uvx",
+      "args": ["--from", "git+https://github.com/joestump/signal-mcp", "signal-mcp", "--operator", "+15551234567", "--transport", "stdio"]
     }
   }
 }
@@ -78,7 +109,7 @@ Add to your `.mcp.json` or `~/.claude.json`:
 ### Standalone
 
 ```bash
-uv run signal_mcp/main.py --operator YOUR_PHONE_NUMBER [--transport {sse|stdio}] \
+signal-mcp --operator YOUR_PHONE_NUMBER [--transport {sse|stdio}] \
   [--rpc-host 127.0.0.1] [--rpc-port 7583]
 ```
 
