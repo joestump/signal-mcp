@@ -29,10 +29,13 @@ const config: Config = {
   onBrokenLinks: 'throw',
 
   markdown: {
+    mermaid: true,
     hooks: {
       onBrokenMarkdownLinks: 'warn',
     },
   },
+
+  themes: ['@docusaurus/theme-mermaid'],
 
   i18n: {
     defaultLocale: 'en',
@@ -76,6 +79,36 @@ const config: Config = {
   themeConfig: {
     colorMode: {
       respectPrefersColorScheme: true,
+    },
+    mermaid: {
+      // Signal design system: ultramarine nodes on a soft wash, ink text.
+      // `theme` picks the mermaid base per color mode; `themeVariables`
+      // paints it with the Signal tokens so diagrams match the site.
+      theme: {light: 'base', dark: 'base'},
+      options: {
+        themeVariables: {
+          fontFamily:
+            "'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
+          fontSize: '15px',
+          // Nodes: Signal wash fill, ultramarine border + accents.
+          primaryColor: '#e3e8fe',
+          primaryBorderColor: '#3b45fd',
+          primaryTextColor: '#17171b',
+          secondaryColor: '#cabcf6',
+          secondaryBorderColor: '#7c96f5',
+          secondaryTextColor: '#17171b',
+          tertiaryColor: '#f2f2f5',
+          tertiaryBorderColor: '#c9c9d1',
+          tertiaryTextColor: '#2b2b31',
+          // Edges + labels.
+          lineColor: '#7c96f5',
+          textColor: '#2b2b31',
+          // Labels riding on edges get a legible background.
+          edgeLabelBackground: '#ffffff',
+          clusterBkg: '#f8f8fb',
+          clusterBorder: '#c9d2fb',
+        },
+      },
     },
     navbar: {
       title: 'Signal MCP',

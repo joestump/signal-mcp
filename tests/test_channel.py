@@ -145,16 +145,108 @@ def test_forwards_group_message_with_meta():
     assert sent[0].root.params["meta"]["group"] == "group-123=="
 
 
-def test_skips_non_text_messages():
-    """Reactions (message=None) are not forwarded."""
-    reaction = MessageResponse(
-        sender_id="+1234",
+def _reaction_msg(
+    emoji="\U0001f44d",
+    sender="+1234",
+    sender_name=None,
+    group=None,
+    target_author="+1555",
+    target_timestamp=1744185565466,
+    is_remove=False,
+):
+    return MessageResponse(
+        sender_id=sender,
+        sender_name=sender_name,
+        group_id=group,
+        timestamp=1744185570000,
         reaction=Reaction(
-            emoji="\U0001f44d", target_author="+1234", target_timestamp=1
+            emoji=emoji,
+            target_author=target_author,
+            target_timestamp=target_timestamp,
+            is_remove=is_remove,
         ),
     )
-    sent, _ = _run_forwarder([reaction])
-    assert len(sent) == 0
+
+
+def test_forwards_reaction():
+    """An emoji reaction is forwarded as its own channel event."""
+    sent, _ = _run_forwarder([_reaction_msg(sender="+15551234567", sender_name="Joe")])
+    assert len(sent) == 1
+    notif = sent[0].root
+    assert isinstance(notif, JSONRPCNotification)
+    assert notif.method == "notifications/claude/channel"
+    params = notif.params
+    assert params is not None
+    assert params["content"] == (
+        "[reaction: \U0001f44d to message 1744185565466 from +1555]"
+    )
+    meta = params["meta"]
+    assert meta["sender"] == "+15551234567"
+    assert meta["sender_name"] == "Joe"
+    assert meta["reaction"] == "\U0001f44d"
+    assert meta["reaction_target_timestamp"] == "1744185565466"
+    assert meta["reaction_target_author"] == "+1555"
+    assert "reaction_removed" not in meta
+    assert "group" not in meta
+
+
+def test_forwards_reaction_removal():
+    """Withdrawing a reaction forwards as a 'reaction removed' event."""
+    sent, _ = _run_forwarder([_reaction_msg(is_remove=True)])
+    assert len(sent) == 1
+    params = sent[0].root.params
+    assert params["content"].startswith("[reaction removed: \U0001f44d")
+    assert params["meta"]["reaction_removed"] == "true"
+
+
+def test_forwards_group_reaction_with_meta():
+    """A reaction in a group carries the group id like any channel event."""
+    sent, _ = _run_forwarder([_reaction_msg(group="group-123==")])
+    assert len(sent) == 1
+    assert sent[0].root.params["meta"]["group"] == "group-123=="
+
+
+def test_reaction_sends_no_read_receipt():
+    """Reactions never trigger a read receipt."""
+    sent, fake = _run_forwarder([_reaction_msg()])
+    assert len(sent) == 1
+    assert [c for c in fake.calls if c[0] == "sendReceipt"] == []
+
+
+def test_skips_emoji_less_reaction():
+    """A reaction envelope with no emoji has nothing to forward."""
+    sent, fake = _run_forwarder([_reaction_msg(emoji=None)])
+    assert sent == []
+    assert [c for c in fake.calls if c[0] == "sendReceipt"] == []
+
+
+def test_reaction_without_target_still_forwards():
+    """Sync edge cases may omit the target; the emoji alone still forwards."""
+    sent, _ = _run_forwarder([_reaction_msg(target_author=None, target_timestamp=None)])
+    assert len(sent) == 1
+    params = sent[0].root.params
+    assert params["content"] == "[reaction: \U0001f44d]"
+    assert "reaction_target_timestamp" not in params["meta"]
+    assert "reaction_target_author" not in params["meta"]
+
+
+def test_untrusted_sender_reaction_dropped(monkeypatch):
+    """The trusted-sender gate applies to reactions like any other event."""
+    monkeypatch.setattr(config, "trusted_senders", frozenset({"+15550001111"}))
+    sent, fake = _run_forwarder([_reaction_msg(sender="+19995550000")])
+    assert sent == []
+    assert [c for c in fake.calls if c[0] == "sendReceipt"] == []
+
+
+def test_reaction_bypasses_prefix_filter():
+    """Reactions carry no text, so the prefix filter does not apply to them —
+    but it still filters ordinary text messages in the same session."""
+    sent, _ = _run_forwarder(
+        [_reaction_msg(), _text_msg("buy milk")],
+        prefix="cc",
+    )
+    assert len(sent) == 1
+    assert sent[0].root.params["meta"]["reaction"] == "\U0001f44d"
 
 
 def test_prefix_filters_and_strips():
@@ -361,16 +453,10 @@ def test_prefix_applies_to_caption_of_attachment_message():
     )
 
 
-def test_reactions_still_skipped_with_attachment_support():
-    """Reactions are never forwarded, even now that empty text can forward."""
-    reaction = MessageResponse(
-        sender_id="+1234",
-        reaction=Reaction(
-            emoji="\U0001f44d", target_author="+1234", target_timestamp=1
-        ),
-    )
+def test_truly_empty_message_still_skipped():
+    """A message with no text, no attachments, and no reaction is dropped."""
     truly_empty = MessageResponse(sender_id="+1234", timestamp=1)
-    sent, fake = _run_forwarder([reaction, truly_empty])
+    sent, fake = _run_forwarder([truly_empty])
     assert sent == []
     assert [c for c in fake.calls if c[0] == "sendReceipt"] == []
 

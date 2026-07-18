@@ -21,16 +21,26 @@ Signal MCP is a thin JSON-RPC client for a long-running `signal-cli daemon`. Ins
 - calls are instant (no ~2-3s JVM cold start each time)
 - concurrent callers no longer fight over the signal-cli account lock
 
-```
-┌──────────────┐     MCP (stdio/SSE)     ┌───────────────┐     JSON-RPC (TCP)     ┌─────────────────┐
-│  AI Agent    │◄───────────────────────►│  Signal MCP   │◄──────────────────────►│ signal-cli      │
-│  (Claude)    │                         │  Server       │                        │ daemon          │
-└──────────────┘                         └───────────────┘                        └────────┬────────┘
-                                                                                            │
-                                                                                    ┌───────▼───────┐
-                                                                                    │ Signal servers │
-                                                                                    │   (phone)      │
-                                                                                    └───────────────┘
+```mermaid
+flowchart LR
+    agent["AI Agent<br/>(Claude)"]
+    mcp["Signal MCP<br/>Server"]
+    daemon["signal-cli<br/>daemon"]
+    signal["Signal servers<br/>(phone)"]
+
+    agent <==>|"MCP · stdio/SSE"| mcp
+    mcp <==>|"JSON-RPC · TCP"| daemon
+    daemon <==>|"Signal protocol"| signal
+
+    classDef agent fill:#e3e8fe,stroke:#3b45fd,stroke-width:2px,color:#17171b;
+    classDef hero fill:#3b45fd,stroke:#212ab0,stroke-width:2px,color:#ffffff;
+    classDef plain fill:#f2f2f5,stroke:#c9c9d1,stroke-width:2px,color:#2b2b31;
+    classDef signal fill:#cabcf6,stroke:#7c96f5,stroke-width:2px,color:#17171b;
+
+    class agent agent;
+    class mcp hero;
+    class daemon plain;
+    class signal signal;
 ```
 
 ## Quick start
