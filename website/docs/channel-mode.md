@@ -13,13 +13,27 @@ Instead of Claude calling `receive_message` in a loop, the MCP server runs a bac
 
 Emoji reactions are forwarded as their own channel events: react to one of the agent's messages from your phone and it sees a body like `[reaction: 👍 to message 1744185565466 from +15551234567]` (or `[reaction removed: …]` when you withdraw one), with the emoji and the reacted-to message's timestamp/author also in the notification `meta`. Reactions respect the trusted-sender gate, never trigger a read receipt, and are not subject to `--prefix` filtering (they carry no text to match).
 
-```
-Phone ──► Signal servers ──► signal-cli daemon ──► Signal MCP ──► Agent (Claude/Crush)
-                                                         │
-                                          notifications/claude/channel
-                                                         │
-                                              sendReceipt (auto mark-read
-                                              to message author)
+```mermaid
+flowchart LR
+    phone["Phone"]
+    signal["Signal<br/>servers"]
+    daemon["signal-cli<br/>daemon"]
+    mcp["Signal MCP"]
+    agent["Agent<br/>(Claude / Crush)"]
+
+    phone ==> signal ==> daemon ==> mcp
+    mcp ==>|"notifications/claude/channel"| agent
+    mcp -.->|"sendReceipt · auto mark-read to author"| daemon
+
+    classDef phone fill:#cabcf6,stroke:#7c96f5,stroke-width:2px,color:#17171b;
+    classDef plain fill:#f2f2f5,stroke:#c9c9d1,stroke-width:2px,color:#2b2b31;
+    classDef hero fill:#3b45fd,stroke:#212ab0,stroke-width:2px,color:#ffffff;
+    classDef agent fill:#e3e8fe,stroke:#3b45fd,stroke-width:2px,color:#17171b;
+
+    class phone phone;
+    class signal,daemon plain;
+    class mcp hero;
+    class agent agent;
 ```
 
 Claude sees the message as a `<channel>` tag in its conversation context (Crush does the same) and can respond immediately using the `send` or `send_message_to_user` tools.
