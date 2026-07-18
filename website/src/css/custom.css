@@ -176,6 +176,20 @@ h1, h2, h3, h4 {
   padding: 0 var(--sig-space-6);
 }
 
+/* The mobile navbar sidebar (≤996px) renders as a position:fixed child of
+   .navbar. A backdrop-filter on an ancestor makes that ancestor the
+   containing block for fixed descendants, so the sidebar's top/bottom/height
+   resolve against the 60px navbar instead of the viewport — collapsing the
+   menu to the header row and clipping every link. Drop the blur below the
+   sidebar breakpoint (the translucent background stays) so the sidebar sizes
+   to the full viewport. */
+@media (max-width: 996px) {
+  .navbar {
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+}
+
 .navbar__brand {
   gap: 0.6rem;
 }
