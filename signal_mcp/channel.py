@@ -109,6 +109,36 @@ def _attachment_line(attachment: Attachment) -> str:
     return f"[attachment: {name} ({content_type}, {size}) — file not available locally]"
 
 
+def _base_meta(msg: MessageResponse) -> dict[str, str]:
+    """Build the ``meta`` fields common to every channel event.
+
+    ``sender`` is always present (empty string when unknown); ``sender_name``
+    and ``group`` are added only when set. Callers may extend the returned dict
+    with event-specific fields (e.g. reaction details).
+    """
+    meta: dict[str, str] = {"sender": msg.sender_id or ""}
+    if msg.sender_name:
+        meta["sender_name"] = msg.sender_name
+    if msg.group_id:
+        meta["group"] = msg.group_id
+    return meta
+
+
+def _channel_notification(content: str, meta: dict[str, str]) -> JSONRPCMessage:
+    """Wrap ``content`` and ``meta`` in a ``notifications/claude/channel`` event.
+
+    The single place the channel notification shape is constructed, so text
+    messages and reactions stay in lockstep.
+    """
+    return JSONRPCMessage(
+        root=JSONRPCNotification(
+            jsonrpc="2.0",
+            method="notifications/claude/channel",
+            params={"content": content, "meta": meta},
+        )
+    )
+
+
 def _reaction_notification(msg: MessageResponse) -> JSONRPCMessage | None:
     """Build the channel notification for an inbound emoji reaction.
 
@@ -140,11 +170,7 @@ def _reaction_notification(msg: MessageResponse) -> JSONRPCMessage | None:
     target = (" " + " ".join(target_bits)) if target_bits else ""
     content = f"[{verb}: {reaction.emoji}{target}]"
 
-    meta: dict[str, str] = {"sender": msg.sender_id or ""}
-    if msg.sender_name:
-        meta["sender_name"] = msg.sender_name
-    if msg.group_id:
-        meta["group"] = msg.group_id
+    meta = _base_meta(msg)
     meta["reaction"] = reaction.emoji
     if reaction.target_timestamp is not None:
         meta["reaction_target_timestamp"] = str(reaction.target_timestamp)
@@ -153,13 +179,7 @@ def _reaction_notification(msg: MessageResponse) -> JSONRPCMessage | None:
     if reaction.is_remove:
         meta["reaction_removed"] = "true"
 
-    return JSONRPCMessage(
-        root=JSONRPCNotification(
-            jsonrpc="2.0",
-            method="notifications/claude/channel",
-            params={"content": content, "meta": meta},
-        )
-    )
+    return _channel_notification(content, meta)
 
 
 def _strip_prefix(text: str, prefix: str) -> str | None:
@@ -271,19 +291,7 @@ async def _forward_channel_messages(write_stream: Any) -> None:
             content_parts.extend(_attachment_line(a) for a in msg.attachments)
             content = "\n".join(content_parts)
 
-            meta: dict[str, str] = {"sender": msg.sender_id or ""}
-            if msg.sender_name:
-                meta["sender_name"] = msg.sender_name
-            if msg.group_id:
-                meta["group"] = msg.group_id
-
-            notification = JSONRPCMessage(
-                root=JSONRPCNotification(
-                    jsonrpc="2.0",
-                    method="notifications/claude/channel",
-                    params={"content": content, "meta": meta},
-                )
-            )
+            notification = _channel_notification(content, _base_meta(msg))
             await write_stream.send(notification)
             logger.info(f"Channel forwarder: forwarded message from {msg.sender_id}")
 
