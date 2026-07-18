@@ -16,7 +16,7 @@ from mcp.types import JSONRPCMessage, JSONRPCNotification
 
 from signal_mcp import s3
 from signal_mcp.config import config, is_trusted_sender
-from signal_mcp.parse import Attachment
+from signal_mcp.parse import Attachment, MessageResponse
 from signal_mcp.prompts import SIGNAL_FORMATTING_RULES
 from signal_mcp.rpc import SignalCLIError, get_client
 from signal_mcp.tools import _send_receipt, mcp
@@ -38,6 +38,13 @@ storage is enabled the annotation instead carries a presigned URL, like
 a scratch directory and then read the file. The URL is short-lived, so fetch
 it promptly. A line noting "file not available locally" means only the
 metadata is known.
+Emoji reactions arrive as their own channel events with a body like
+[reaction: 👍 to message 1744185565466 from +15551234567] (or
+[reaction removed: ...] when the sender withdraws one). The trailing number
+pair identifies the reacted-to message by its Signal timestamp and author —
+when the author is your own account, the user reacted to one of YOUR
+messages. Reactions are lightweight feedback: treat 👍-style reactions as
+acknowledgement, and do not send a reply unless the reaction calls for one.
 Use send_message_to_user with the sender attribute as user_id to reply.
 Use send to proactively message the operator's phone (no phone number needed).
 Always reply to acknowledge inbound messages, even if briefly.
@@ -102,6 +109,59 @@ def _attachment_line(attachment: Attachment) -> str:
     return f"[attachment: {name} ({content_type}, {size}) — file not available locally]"
 
 
+def _reaction_notification(msg: MessageResponse) -> JSONRPCMessage | None:
+    """Build the channel notification for an inbound emoji reaction.
+
+    The body is a single annotation line in the same bracketed style as
+    attachments::
+
+        [reaction: 👍 to message 1744185565466 from +15551234567]
+        [reaction removed: 👍 to message 1744185565466 from +15551234567]
+
+    ``meta`` carries the sender fields every channel event has, plus
+    ``reaction`` (the emoji), ``reaction_target_timestamp`` and
+    ``reaction_target_author`` (identifying the reacted-to message), and
+    ``reaction_removed: "true"`` when the sender withdrew the reaction.
+
+    Returns ``None`` for reaction envelopes with no emoji — signal-cli can
+    emit these for edge-case syncs, and there is nothing meaningful to
+    forward.
+    """
+    reaction = msg.reaction
+    if reaction is None or not reaction.emoji:
+        return None
+
+    verb = "reaction removed" if reaction.is_remove else "reaction"
+    target_bits = []
+    if reaction.target_timestamp is not None:
+        target_bits.append(f"to message {reaction.target_timestamp}")
+    if reaction.target_author:
+        target_bits.append(f"from {reaction.target_author}")
+    target = (" " + " ".join(target_bits)) if target_bits else ""
+    content = f"[{verb}: {reaction.emoji}{target}]"
+
+    meta: dict[str, str] = {"sender": msg.sender_id or ""}
+    if msg.sender_name:
+        meta["sender_name"] = msg.sender_name
+    if msg.group_id:
+        meta["group"] = msg.group_id
+    meta["reaction"] = reaction.emoji
+    if reaction.target_timestamp is not None:
+        meta["reaction_target_timestamp"] = str(reaction.target_timestamp)
+    if reaction.target_author:
+        meta["reaction_target_author"] = reaction.target_author
+    if reaction.is_remove:
+        meta["reaction_removed"] = "true"
+
+    return JSONRPCMessage(
+        root=JSONRPCNotification(
+            jsonrpc="2.0",
+            method="notifications/claude/channel",
+            params={"content": content, "meta": meta},
+        )
+    )
+
+
 def _strip_prefix(text: str, prefix: str) -> str | None:
     """Strip ``prefix`` from ``text`` when it matches on a word boundary.
 
@@ -159,9 +219,29 @@ async def _forward_channel_messages(write_stream: Any) -> None:
                 )
                 continue
 
-            # Skip reactions and truly-empty messages. A message with text
-            # OR attachments (including attachment-only messages) forwards.
-            if msg.reaction is not None or (not msg.message and not msg.attachments):
+            # Emoji reactions forward as their own channel events. They carry
+            # no text, so the prefix filter below deliberately does not apply
+            # (a reaction is a pointed, low-volume act by an already-trusted
+            # sender; requiring a prefix would silently disable the feature
+            # for prefix users). No read receipt is sent for a reaction —
+            # Signal clients do not expect reads for reactions.
+            if msg.reaction is not None:
+                notification = _reaction_notification(msg)
+                if notification is None:
+                    logger.info(
+                        "Channel forwarder: skipped emoji-less reaction "
+                        f"envelope from {msg.sender_id}"
+                    )
+                    continue
+                await write_stream.send(notification)
+                logger.info(
+                    f"Channel forwarder: forwarded reaction from {msg.sender_id}"
+                )
+                continue
+
+            # Skip truly-empty messages. A message with text OR attachments
+            # (including attachment-only messages) forwards.
+            if not msg.message and not msg.attachments:
                 continue
 
             text = msg.message or ""

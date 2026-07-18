@@ -11,6 +11,8 @@ Channel mode is a powerful integration with [Claude Code](https://code.claude.co
 
 Instead of Claude calling `receive_message` in a loop, the MCP server runs a background task that watches the signal-cli daemon's message queue. When a new message arrives, it's immediately forwarded to Claude via the `notifications/claude/channel` MCP notification.
 
+Emoji reactions are forwarded as their own channel events: react to one of the agent's messages from your phone and it sees a body like `[reaction: 👍 to message 1744185565466 from +15551234567]` (or `[reaction removed: …]` when you withdraw one), with the emoji and the reacted-to message's timestamp/author also in the notification `meta`. Reactions respect the trusted-sender gate, never trigger a read receipt, and are not subject to `--prefix` filtering (they carry no text to match).
+
 ```
 Phone ──► Signal servers ──► signal-cli daemon ──► Signal MCP ──► Agent (Claude/Crush)
                                                          │

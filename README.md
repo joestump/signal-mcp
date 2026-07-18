@@ -35,6 +35,8 @@ reactions — through a long-running `signal-cli daemon`.
 - React to messages with emoji (and remove reactions)
 - Receive and parse incoming messages, including emoji reactions and
   "Note to Self" reaction syncs that plain-text parsing can't recover
+- Push inbound emoji reactions to the agent in channel mode — react to the
+  bot's message from your phone and it sees `[reaction: 👍 …]` in real time
 - Restrict who the server may message with a trusted-recipients allowlist
 - Gate inbound messages on a trusted-senders allowlist — deny-by-default in
   channel mode, so strangers can't inject prompts into the agent's context
@@ -389,8 +391,18 @@ moment it arrives.
 - The server declares the `claude/channel` experimental capability so Claude
   knows to expect push notifications.
 - A background task listens on the signal-cli daemon and forwards each text
-  message as a `notifications/claude/channel` notification. Reactions are not
-  forwarded.
+  message as a `notifications/claude/channel` notification.
+- **Emoji reactions are forwarded too** — react to one of the agent's
+  messages from your phone and the agent sees it as its own channel event
+  with a body like `[reaction: 👍 to message 1744185565466 from
+  +15551234567]` (or `[reaction removed: …]` when you withdraw one). The
+  notification `meta` carries the emoji plus the reacted-to message's
+  timestamp and author (`reaction`, `reaction_target_timestamp`,
+  `reaction_target_author`, and `reaction_removed: "true"` on removal), so
+  the agent can tell reactions to its own messages apart from reactions to
+  anything else. Reactions respect the trusted-sender gate like every other
+  inbound event, never trigger a read receipt, and — since they carry no
+  text — are **not** subject to `--prefix` filtering.
 - Messages carrying attachments are forwarded too — including
   **attachment-only** messages (e.g. a bare photo with no caption). Each
   attachment appends one line to the notification body:
