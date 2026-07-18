@@ -15,3 +15,6 @@ wheels/
 .coverage
 .coverage.*
 htmlcov/
+
+# Design mockups pulled from claude.ai/design (not committed)
+website/design/

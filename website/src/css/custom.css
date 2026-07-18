@@ -1,30 +1,764 @@
 /**
- * Any CSS included here will be global. The classic template
- * bundles Infima by default. Infima is a CSS framework designed to
- * work well for content-centric websites.
+ * Signal MCP — Docusaurus theme.
+ *
+ * Ported from the Signal design system (website/design/signal/):
+ * canonical --sig-* tokens mapped onto Infima's --ifm-* variables, plus the
+ * .sig-* component classes used by the homepage. Fonts (Inter, JetBrains Mono)
+ * are loaded via `stylesheets` in docusaurus.config.ts.
  */
 
-/* You can override the default Infima variables here. */
+/* ==========================================================================
+   Signal design tokens
+   ========================================================================== */
 :root {
-  --ifm-color-primary: #2e8555;
-  --ifm-color-primary-dark: #29784c;
-  --ifm-color-primary-darker: #277148;
-  --ifm-color-primary-darkest: #205d3b;
-  --ifm-color-primary-light: #33925d;
-  --ifm-color-primary-lighter: #359962;
-  --ifm-color-primary-lightest: #3cad6e;
-  --ifm-code-font-size: 95%;
-  --docusaurus-highlighted-code-line-bg: rgba(0, 0, 0, 0.1);
+  /* Brand */
+  --sig-ultramarine: #3b45fd;
+  --sig-ultramarine-hover: #2b34d6;
+  --sig-ultramarine-active: #212ab0;
+  --sig-wash: #e3e8fe;
+  --sig-wash-strong: #c9d2fb;
+  --sig-periwinkle: #7c96f5;
+  --sig-periwinkle-soft: #a9bbf8;
+
+  /* Chat */
+  --sig-bubble-sent: #2f6bed;
+  --sig-bubble-received: #f0f1f5;
+  --sig-note-lavender: #cabcf6;
+
+  /* Neutrals */
+  --sig-ink: #17171b;
+  --sig-gray-900: #1f1f23;
+  --sig-gray-800: #2c2c30;
+  --sig-gray-700: #3a3a40;
+  --sig-gray-500: #6b6b73;
+  --sig-gray-400: #8b8b93;
+  --sig-gray-300: #c9c9d1;
+  --sig-gray-200: #e4e4ea;
+  --sig-gray-100: #f2f2f5;
+  --sig-gray-50: #f8f8fb;
+
+  /* Semantic */
+  --sig-success: #2c9c5a;
+  --sig-warning: #e6a817;
+  --sig-danger: #f5432c;
+
+  /* Surfaces / text */
+  --sig-bg: #ffffff;
+  --sig-surface: var(--sig-gray-50);
+  --sig-border: var(--sig-gray-200);
+  --sig-text: #2b2b31;
+  --sig-text-strong: var(--sig-ink);
+  --sig-text-muted: var(--sig-gray-500);
+
+  /* Radii */
+  --sig-radius-xs: 6px;
+  --sig-radius-sm: 10px;
+  --sig-radius-md: 14px;
+  --sig-radius-lg: 20px;
+  --sig-radius-pill: 999px;
+
+  /* Spacing (4px base) */
+  --sig-space-1: 4px;
+  --sig-space-2: 8px;
+  --sig-space-3: 12px;
+  --sig-space-4: 16px;
+  --sig-space-5: 24px;
+  --sig-space-6: 32px;
+  --sig-space-7: 48px;
+  --sig-space-8: 64px;
+
+  /* Shadows */
+  --sig-shadow-sm: 0 1px 2px rgba(23, 23, 27, 0.06), 0 1px 3px rgba(23, 23, 27, 0.08);
+  --sig-shadow-md: 0 4px 12px rgba(23, 23, 27, 0.08), 0 2px 4px rgba(23, 23, 27, 0.06);
+  --sig-shadow-lg: 0 12px 32px rgba(23, 23, 27, 0.12), 0 4px 8px rgba(23, 23, 27, 0.06);
+  --sig-shadow-brand: 0 8px 24px rgba(59, 69, 253, 0.28);
+
+  /* Type */
+  --sig-font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI',
+    Roboto, Helvetica, Arial, sans-serif;
+  --sig-font-mono: 'JetBrains Mono', 'SF Mono', ui-monospace, SFMono-Regular,
+    Menlo, Consolas, monospace;
 }
 
-/* For readability concerns, you should choose a lighter palette in dark mode. */
 [data-theme='dark'] {
-  --ifm-color-primary: #25c2a0;
-  --ifm-color-primary-dark: #21af90;
-  --ifm-color-primary-darker: #1fa588;
-  --ifm-color-primary-darkest: #1a8870;
-  --ifm-color-primary-light: #29d5b0;
-  --ifm-color-primary-lighter: #32d8b4;
-  --ifm-color-primary-lightest: #4fddbf;
-  --docusaurus-highlighted-code-line-bg: rgba(0, 0, 0, 0.3);
+  --sig-wash: #20233a;
+  --sig-wash-strong: #2a2f4d;
+  --sig-bubble-received: #2c2c30;
+
+  --sig-bg: #17171b;
+  --sig-surface: #1f1f23;
+  --sig-border: #2c2c30;
+  --sig-text: #d8d8de;
+  --sig-text-strong: #f5f5f7;
+  --sig-text-muted: #8b8b93;
+
+  --sig-ultramarine: #8b93ff;
+  --sig-ultramarine-hover: #a7adff;
+  --sig-shadow-brand: 0 8px 24px rgba(59, 69, 253, 0.45);
+}
+
+/* ==========================================================================
+   Infima mapping
+   ========================================================================== */
+:root {
+  --ifm-color-primary: #3b45fd;
+  --ifm-color-primary-dark: #2b34d6;
+  --ifm-color-primary-darker: #262fc4;
+  --ifm-color-primary-darkest: #212ab0;
+  --ifm-color-primary-light: #5b63fd;
+  --ifm-color-primary-lighter: #7c96f5;
+  --ifm-color-primary-lightest: #a9bbf8;
+
+  --ifm-font-family-base: var(--sig-font-sans);
+  --ifm-font-family-monospace: var(--sig-font-mono);
+  --ifm-font-color-base: var(--sig-text);
+  --ifm-heading-color: var(--sig-text-strong);
+  --ifm-heading-font-weight: 800;
+  --ifm-background-color: var(--sig-bg);
+  --ifm-background-surface-color: var(--sig-surface);
+  --ifm-link-color: var(--sig-ultramarine);
+  --ifm-link-hover-color: var(--sig-ultramarine-hover);
+
+  --ifm-global-radius: var(--sig-radius-md);
+  --ifm-code-border-radius: var(--sig-radius-xs);
+  --ifm-code-font-size: 85%;
+  --ifm-code-background: var(--sig-wash);
+  --ifm-toc-border-color: var(--sig-border);
+
+  --ifm-navbar-height: 60px;
+  --ifm-navbar-shadow: none;
+
+  --ifm-footer-background-color: var(--sig-surface);
+  --ifm-footer-color: var(--sig-text-muted);
+  --ifm-footer-link-color: var(--sig-ultramarine);
+
+  --ifm-table-border-color: var(--sig-border);
+  --ifm-table-stripe-background: transparent;
+  --ifm-table-head-background: transparent;
+  --ifm-hr-background-color: var(--sig-border);
+
+  --docusaurus-highlighted-code-line-bg: rgba(255, 255, 255, 0.08);
+}
+
+[data-theme='dark'] {
+  --ifm-color-primary: #8b93ff;
+  --ifm-color-primary-dark: #6a74ff;
+  --ifm-color-primary-darker: #5a64ff;
+  --ifm-color-primary-darkest: #3b45fd;
+  --ifm-color-primary-light: #a7adff;
+  --ifm-color-primary-lighter: #b8bdff;
+  --ifm-color-primary-lightest: #d3d6ff;
+
+  --ifm-background-color: var(--sig-bg);
+  --docusaurus-highlighted-code-line-bg: rgba(255, 255, 255, 0.08);
+}
+
+/* ==========================================================================
+   Base typography
+   ========================================================================== */
+body {
+  -webkit-font-smoothing: antialiased;
+  font-feature-settings: 'cv11', 'ss01';
+}
+
+h1, h2, h3, h4 {
+  letter-spacing: -0.025em;
+}
+
+/* ==========================================================================
+   Navbar — sticky, translucent, blurred; pill links
+   ========================================================================== */
+.navbar {
+  background: color-mix(in srgb, var(--sig-bg) 88%, transparent);
+  -webkit-backdrop-filter: saturate(180%) blur(12px);
+  backdrop-filter: saturate(180%) blur(12px);
+  border-bottom: 1px solid var(--sig-border);
+  padding: 0 var(--sig-space-6);
+}
+
+.navbar__brand {
+  gap: 0.6rem;
+}
+
+.navbar__logo {
+  height: 32px;
+  width: 32px;
+  filter: drop-shadow(0 4px 12px rgba(59, 69, 253, 0.28));
+}
+
+.navbar__title {
+  font-weight: 800;
+  font-size: 1.05rem;
+  letter-spacing: -0.02em;
+  color: var(--sig-text-strong);
+}
+
+.navbar__link {
+  padding: 0.4rem 0.8rem;
+  margin: 0 0.125rem;
+  border-radius: var(--sig-radius-pill);
+  font-size: 0.92rem;
+  font-weight: 600;
+  color: var(--sig-text-strong);
+}
+
+.navbar__link:hover {
+  background: var(--sig-wash);
+  color: var(--sig-ultramarine);
+}
+
+.navbar__link--active {
+  background: var(--sig-wash);
+  color: var(--sig-ultramarine);
+}
+
+/* GitHub icon button */
+.header-github-link {
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  margin-left: 0.25rem;
+  border-radius: var(--sig-radius-pill);
+}
+
+.header-github-link:hover {
+  background: var(--sig-wash);
+}
+
+.header-github-link::before {
+  content: '';
+  width: 20px;
+  height: 20px;
+  background: var(--sig-text-strong);
+  mask: url("data:image/svg+xml,%3Csvg viewBox='0 0 24 24' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M12 .5C5.7.5.5 5.7.5 12c0 5.1 3.3 9.4 7.9 10.9.6.1.8-.2.8-.5v-2c-3.2.7-3.9-1.4-3.9-1.4-.5-1.3-1.3-1.7-1.3-1.7-1.1-.7.1-.7.1-.7 1.2.1 1.8 1.2 1.8 1.2 1 1.8 2.7 1.3 3.4 1 .1-.8.4-1.3.8-1.6-2.6-.3-5.3-1.3-5.3-5.7 0-1.3.5-2.3 1.2-3.1-.1-.3-.5-1.5.1-3.1 0 0 1-.3 3.3 1.2a11.5 11.5 0 0 1 6 0C17.3 4.7 18.3 5 18.3 5c.6 1.6.2 2.8.1 3.1.8.8 1.2 1.8 1.2 3.1 0 4.4-2.7 5.4-5.3 5.7.4.4.8 1.1.8 2.2v3.3c0 .3.2.6.8.5 4.6-1.5 7.9-5.8 7.9-10.9C23.5 5.7 18.3.5 12 .5z'/%3E%3C/svg%3E") no-repeat center / contain;
+}
+
+/* Theme toggle as a bordered round button */
+.navbar [class*='toggleButton'] {
+  width: 36px;
+  height: 36px;
+  border-radius: var(--sig-radius-pill);
+  background: var(--sig-surface);
+  box-shadow: inset 0 0 0 1px var(--sig-border);
+  color: var(--sig-text-strong);
+}
+
+.navbar [class*='toggleButton']:hover {
+  background: var(--sig-wash);
+}
+
+/* ==========================================================================
+   Doc sidebar — uppercase group labels, rounded wash-active links
+   ========================================================================== */
+.menu {
+  padding: var(--sig-space-4) var(--sig-space-3) !important;
+  font-weight: 600;
+}
+
+.menu__list-item-collapsible--active,
+.menu__list-item-collapsible:hover {
+  background: transparent;
+}
+
+/* Non-collapsible category headers ("Guides", "API Reference") */
+.theme-doc-sidebar-item-category > .menu__list-item-collapsible .menu__link {
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--sig-text-strong);
+  cursor: default;
+  pointer-events: none;
+}
+
+.theme-doc-sidebar-item-category .menu__list {
+  margin-left: 0;
+  border-left: none;
+  padding-left: 0;
+}
+
+.theme-doc-sidebar-item-category + .theme-doc-sidebar-item-category {
+  margin-top: var(--sig-space-5);
+}
+
+.menu__link {
+  border-radius: var(--sig-radius-sm);
+  font-size: 0.9rem;
+  color: var(--sig-text-muted);
+  padding: 0.5rem 0.75rem;
+}
+
+.menu__link:hover {
+  background: var(--sig-wash);
+  color: var(--sig-ultramarine);
+}
+
+.menu__link--active,
+.menu__link--active:hover {
+  background: var(--sig-wash);
+  color: var(--sig-ultramarine);
+  font-weight: 600;
+}
+
+/* ==========================================================================
+   Doc content
+   ========================================================================== */
+.markdown h1:first-child {
+  font-size: clamp(2rem, 4vw, 2.75rem);
+  letter-spacing: -0.03em;
+}
+
+.markdown h2 {
+  font-size: 1.6rem;
+  margin-top: 2.4rem;
+}
+
+.markdown h3 {
+  font-size: 1.15rem;
+  font-weight: 700;
+}
+
+.markdown {
+  line-height: 1.7;
+}
+
+/* Inline code — wash chip */
+code {
+  border: none;
+  color: var(--sig-ultramarine-hover);
+  padding: 0.1em 0.4em;
+}
+
+a code {
+  color: inherit;
+}
+
+/* Code blocks — ink panel in both themes (kept in sync with the prism theme
+   set in docusaurus.config.ts) */
+.theme-code-block {
+  --prism-background-color: var(--sig-ink) !important;
+  border-radius: var(--sig-radius-md);
+  box-shadow: none;
+}
+
+[data-theme='dark'] .theme-code-block {
+  box-shadow: inset 0 0 0 1px var(--sig-border);
+}
+
+.theme-code-block pre code {
+  padding: 1rem 1.15rem;
+  font-size: 0.82rem;
+  line-height: 1.6;
+}
+
+div[class*='codeBlockTitle'] {
+  background: var(--sig-gray-900) !important;
+  color: var(--sig-gray-300);
+  border-bottom: 1px solid var(--sig-gray-800);
+  font-family: var(--sig-font-mono);
+  font-size: 0.75rem;
+}
+
+/* Tables — mockup style: mono uppercase headers, row borders only */
+.markdown table {
+  display: table;
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.markdown table thead {
+  background: transparent;
+}
+
+.markdown table th {
+  font-family: var(--sig-font-mono);
+  font-size: 0.66rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--sig-text-muted);
+  font-weight: 700;
+  text-align: left;
+  border: none;
+  border-bottom: 1px solid var(--sig-border);
+  padding: 0.5rem 0.85rem;
+}
+
+.markdown table td {
+  border: none;
+  border-bottom: 1px solid var(--sig-border);
+  padding: 0.65rem 0.85rem;
+  font-size: 0.88rem;
+}
+
+.markdown table tr {
+  background: transparent !important;
+  border: none;
+}
+
+/* Admonitions — sig-alert style */
+.theme-admonition {
+  border: none;
+  border-left: 4px solid var(--sig-ultramarine);
+  border-radius: var(--sig-radius-md);
+  background: var(--sig-wash);
+  color: var(--sig-text-strong);
+  box-shadow: none;
+}
+
+.theme-admonition-warning {
+  border-left-color: var(--sig-warning);
+  background: rgba(230, 168, 23, 0.12);
+}
+
+.theme-admonition-danger {
+  border-left-color: var(--sig-danger);
+  background: rgba(245, 67, 44, 0.1);
+}
+
+/* Breadcrumbs */
+.breadcrumbs__link {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--sig-text-muted);
+  border-radius: var(--sig-radius-pill);
+}
+
+.breadcrumbs__item--active .breadcrumbs__link {
+  background: var(--sig-wash);
+  color: var(--sig-ultramarine);
+}
+
+/* Right TOC — "On this page" */
+.table-of-contents {
+  font-size: 0.82rem;
+  border-left: 2px solid var(--sig-border);
+  padding-left: var(--sig-space-4);
+}
+
+.table-of-contents__link {
+  color: var(--sig-text-muted);
+}
+
+.table-of-contents__link:hover,
+.table-of-contents__link--active {
+  color: var(--sig-ultramarine);
+  font-weight: 600;
+}
+
+/* Prev / next pagination — outline pill buttons */
+.pagination-nav__link {
+  border: none;
+  border-radius: var(--sig-radius-pill);
+  box-shadow: inset 0 0 0 2px var(--sig-wash-strong);
+  padding: 0.85rem 1.5rem;
+}
+
+.pagination-nav__link:hover {
+  background: var(--sig-wash);
+  box-shadow: inset 0 0 0 2px var(--sig-wash-strong);
+}
+
+.pagination-nav__sublabel {
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--sig-text-muted);
+}
+
+.pagination-nav__label {
+  font-weight: 700;
+  color: var(--sig-ultramarine);
+}
+
+/* ==========================================================================
+   Footer — minimal single row
+   ========================================================================== */
+.footer {
+  border-top: 1px solid var(--sig-border);
+  background: var(--sig-surface);
+  padding: var(--sig-space-6);
+}
+
+.footer .container {
+  display: flex;
+  flex-direction: row-reverse;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sig-space-4);
+  flex-wrap: wrap;
+}
+
+.footer__links {
+  margin-bottom: 0;
+}
+
+.footer .row .col {
+  margin-bottom: 0;
+}
+
+.footer__items {
+  display: flex;
+  gap: var(--sig-space-4);
+}
+
+.footer__item {
+  margin: 0;
+}
+
+.footer__link-item {
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.footer__copyright {
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: var(--sig-text-muted);
+}
+
+/* ==========================================================================
+   Signal component classes (used by the homepage)
+   ========================================================================== */
+.sig-eyebrow {
+  display: inline-block;
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--sig-ultramarine);
+}
+
+.sig-display {
+  font-size: clamp(2.6rem, 6vw, 4rem);
+  font-weight: 800;
+  letter-spacing: -0.035em;
+  line-height: 1.02;
+  color: var(--sig-text-strong);
+  margin: 0;
+}
+
+.sig-code {
+  font-family: var(--sig-font-mono);
+  font-size: 0.9em;
+  background: var(--sig-wash);
+  color: var(--sig-ultramarine-hover);
+  padding: 0.1em 0.4em;
+  border-radius: var(--sig-radius-xs);
+  border: 1px solid var(--sig-wash-strong);
+}
+
+/* Buttons — Signal pills */
+.sig-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sig-space-2);
+  font-family: var(--sig-font-sans);
+  font-weight: 700;
+  font-size: 1rem;
+  letter-spacing: -0.01em;
+  line-height: 1;
+  padding: 0.75rem 1.5rem;
+  border: none;
+  border-radius: var(--sig-radius-pill);
+  cursor: pointer;
+  text-decoration: none;
+  transition: transform 120ms ease, box-shadow 160ms ease, background-color 160ms ease;
+}
+
+.sig-btn:hover {
+  text-decoration: none;
+}
+
+.sig-btn--lg {
+  padding: 0.95rem 2rem;
+  font-size: 1.05rem;
+}
+
+.sig-btn--primary {
+  background: var(--sig-ultramarine);
+  color: #fff;
+  box-shadow: var(--sig-shadow-brand);
+}
+
+.sig-btn--primary:hover {
+  background: var(--sig-ultramarine-hover);
+  color: #fff;
+  transform: translateY(-1px);
+}
+
+.sig-btn--secondary {
+  background: #fff;
+  color: var(--sig-ultramarine-active);
+  box-shadow: var(--sig-shadow-md);
+}
+
+.sig-btn--secondary:hover {
+  background: var(--sig-gray-50);
+  color: var(--sig-ultramarine-active);
+  transform: translateY(-1px);
+}
+
+.sig-btn--outline {
+  background: transparent;
+  color: var(--sig-ultramarine);
+  box-shadow: inset 0 0 0 2px var(--sig-wash-strong);
+}
+
+.sig-btn--outline:hover {
+  background: var(--sig-wash);
+  color: var(--sig-ultramarine);
+}
+
+.sig-btn--inverse {
+  background: transparent;
+  color: #fff;
+  box-shadow: inset 0 0 0 2px rgba(255, 255, 255, 0.25);
+}
+
+.sig-btn--inverse:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: #fff;
+}
+
+/* Badges */
+.sig-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sig-space-1);
+  padding: 0.32rem 0.85rem;
+  font-size: 0.82rem;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  border-radius: var(--sig-radius-pill);
+  line-height: 1;
+}
+
+.sig-badge--wash {
+  background: var(--sig-wash);
+  color: var(--sig-ultramarine-hover);
+}
+
+.sig-badge--neutral {
+  background: var(--sig-gray-100);
+  color: var(--sig-gray-500);
+}
+
+[data-theme='dark'] .sig-badge--neutral {
+  background: var(--sig-gray-800);
+  color: var(--sig-gray-300);
+}
+
+/* Cards */
+.sig-card {
+  padding: var(--sig-space-6);
+  background: var(--sig-bg);
+  border: 1px solid var(--sig-border);
+  border-radius: var(--sig-radius-lg);
+  box-shadow: var(--sig-shadow-sm);
+  transition: transform 180ms ease, box-shadow 220ms ease, border-color 220ms ease;
+}
+
+[data-theme='dark'] .sig-card {
+  background: var(--sig-surface);
+}
+
+.sig-card--hover:hover {
+  transform: translateY(-3px);
+  box-shadow: var(--sig-shadow-md);
+  border-color: var(--sig-wash-strong);
+}
+
+.sig-card__icon {
+  display: grid;
+  place-items: center;
+  width: 3.25rem;
+  height: 3.25rem;
+  border-radius: var(--sig-radius-md);
+  background: var(--sig-wash);
+  color: var(--sig-ultramarine);
+  margin-bottom: var(--sig-space-4);
+}
+
+.sig-card__title {
+  font-size: 1.3rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  margin: 0 0 var(--sig-space-2);
+  color: var(--sig-text-strong);
+}
+
+.sig-card__body {
+  color: var(--sig-text-muted);
+  margin: 0;
+  line-height: 1.6;
+}
+
+/* Avatar */
+.sig-avatar {
+  display: grid;
+  place-items: center;
+  width: 2rem;
+  height: 2rem;
+  border-radius: var(--sig-radius-pill);
+  font-size: 1rem;
+  font-weight: 700;
+  overflow: hidden;
+}
+
+.sig-avatar--note {
+  background: var(--sig-note-lavender);
+  color: var(--sig-ultramarine-active);
+}
+
+/* Chat thread — the signature Signal element */
+.sig-thread {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sig-space-2);
+  padding: var(--sig-space-5);
+  background: var(--sig-surface);
+  border: 1px solid var(--sig-border);
+  border-radius: var(--sig-radius-lg);
+}
+
+[data-theme='dark'] .sig-thread {
+  background: #17171b;
+}
+
+.sig-bubble {
+  max-width: 82%;
+  padding: 0.6rem 0.9rem;
+  font-size: 0.95rem;
+  line-height: 1.35;
+  border-radius: var(--sig-radius-lg);
+  word-wrap: break-word;
+}
+
+.sig-bubble--received {
+  align-self: flex-start;
+  background: var(--sig-bubble-received);
+  color: var(--sig-ink);
+  border-bottom-left-radius: var(--sig-radius-xs);
+}
+
+[data-theme='dark'] .sig-bubble--received {
+  color: #ededf2;
+}
+
+.sig-bubble--sent {
+  align-self: flex-end;
+  background: var(--sig-bubble-sent);
+  color: #fff;
+  border-bottom-right-radius: var(--sig-radius-xs);
+}
+
+.sig-bubble__meta {
+  display: block;
+  font-size: 0.72rem;
+  opacity: 0.7;
+  margin-top: 0.2rem;
 }
