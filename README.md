@@ -82,16 +82,18 @@ Phone numbers are in [E.164](https://en.wikipedia.org/wiki/E.164) format
 
 ## Installation
 
-```bash
-# uv (recommended) — auto-syncs dependencies on first run
-uv pip install -e .
+No clone required — install straight from GitHub with [`uv`](https://docs.astral.sh/uv/).
+This puts a `signal-mcp` command on your `PATH`:
 
-# or plain pip
-pip install -e .
+```bash
+uv tool install git+https://github.com/joestump/signal-mcp
 ```
 
-The commands below use `uv run`, which syncs dependencies automatically, so a
-separate install step is optional.
+It tracks `main`; upgrade later with `uv tool upgrade signal-mcp`. The command
+examples below assume this install. To run without installing anything
+persistent, prefix any invocation with
+`uvx --from git+https://github.com/joestump/signal-mcp` — e.g.
+`uvx --from git+https://github.com/joestump/signal-mcp signal-mcp --operator …`.
 
 ## Running the server
 
@@ -111,11 +113,11 @@ operator — otherwise it defaults to the operator (Note to Self):
 
 ```bash
 # Personal machine (account == operator == you): Note to Self
-uv run signal-mcp --operator YOUR_PHONE_NUMBER [--transport sse|stdio] \
+signal-mcp --operator YOUR_PHONE_NUMBER [--transport sse|stdio] \
   [--rpc-host 127.0.0.1] [--rpc-port 7583]
 
 # Dedicated agent with its own number: sends FROM the agent TO you
-uv run signal-mcp --account AGENT_NUMBER --operator YOUR_PHONE_NUMBER --transport stdio
+signal-mcp --account AGENT_NUMBER --operator YOUR_PHONE_NUMBER --transport stdio
 ```
 
 ### Configuration
@@ -174,13 +176,13 @@ ids/names:
 
 ```bash
 # Only allow messaging Alice and one group
-uv run signal-mcp --operator YOUR_PHONE_NUMBER \
+signal-mcp --operator YOUR_PHONE_NUMBER \
     --trusted-recipient +15555550101 \
     --trusted-recipient GROUP_ID
 
 # Equivalent via environment variable
 SIGNAL_MCP_TRUSTED_RECIPIENTS="+15555550101,GROUP_ID" \
-    uv run signal-mcp --operator YOUR_PHONE_NUMBER
+    signal-mcp --operator YOUR_PHONE_NUMBER
 ```
 
 Both sources are merged. When the allowlist is non-empty, any `send_message_*`
@@ -202,13 +204,13 @@ message *author* before they reach the agent:
 
 ```bash
 # Only your own messages and Alice's may reach the agent
-uv run signal-mcp --operator YOUR_PHONE_NUMBER --channel \
+signal-mcp --operator YOUR_PHONE_NUMBER --channel \
     --trusted-sender YOUR_PHONE_NUMBER \
     --trusted-sender +15555550101
 
 # Equivalent via environment variable
 SIGNAL_MCP_TRUSTED_SENDERS="YOUR_PHONE_NUMBER,+15555550101" \
-    uv run signal-mcp --operator YOUR_PHONE_NUMBER --channel
+    signal-mcp --operator YOUR_PHONE_NUMBER --channel
 ```
 
 Both sources are merged and normalized the same way as trusted recipients. How
@@ -240,7 +242,7 @@ The server can stage attachments in an S3-compatible object store and hand out
 presigned URLs. S3 support ships as an optional extra:
 
 ```bash
-uv pip install 'signal-mcp[s3]'   # or: pip install 'signal-mcp[s3]'
+uv tool install "signal-mcp[s3] @ git+https://github.com/joestump/signal-mcp"
 ```
 
 Setting a bucket enables S3 mode; without one the server runs exactly as
@@ -290,7 +292,7 @@ service:
 
 ```bash
 # Garage / MinIO (self-hosted)
-uv run signal-mcp --operator YOUR_PHONE_NUMBER \
+signal-mcp --operator YOUR_PHONE_NUMBER \
     --s3-bucket signal-attachments \
     --s3-endpoint-url http://garage.internal:3900 \
     --s3-region garage
@@ -298,12 +300,12 @@ uv run signal-mcp --operator YOUR_PHONE_NUMBER \
 # Cloudflare R2
 SIGNAL_MCP_S3_BUCKET=signal-attachments \
 SIGNAL_MCP_S3_ENDPOINT_URL=https://ACCOUNT_ID.r2.cloudflarestorage.com \
-    uv run signal-mcp --operator YOUR_PHONE_NUMBER
+    signal-mcp --operator YOUR_PHONE_NUMBER
 
 # Google Cloud Storage (S3 interoperability mode + HMAC keys)
 SIGNAL_MCP_S3_BUCKET=signal-attachments \
 SIGNAL_MCP_S3_ENDPOINT_URL=https://storage.googleapis.com \
-    uv run signal-mcp --operator YOUR_PHONE_NUMBER
+    signal-mcp --operator YOUR_PHONE_NUMBER
 ```
 
 ## Using with Claude (MCP client setup)
@@ -313,9 +315,12 @@ over **stdio**, so configure it with `--transport stdio`. The `signal-cli daemon
 must already be running (see [Running the server](#running-the-server)) — the
 MCP server is just a client to it.
 
-The launch command below uses [`uv`](https://docs.astral.sh/uv/) to run the
-`signal-mcp` entry point from a checkout. Replace `/ABSOLUTE/PATH/TO/signal-mcp`
-with the path to this repository and `+15551234567` with your Signal number.
+The configs below call the `signal-mcp` command from `uv tool install` (see
+[Installation](#installation)). If you'd rather not install anything, swap
+`"command": "signal-mcp"` for
+`"command": "uvx"` with `"--from", "git+https://github.com/joestump/signal-mcp", "signal-mcp"`
+prepended to `args`, and `uv` will fetch it from GitHub on launch. Replace
+`+15551234567` with your Signal number.
 
 ### Claude Desktop
 
@@ -332,11 +337,8 @@ Add a `signal` entry under `mcpServers`:
 {
   "mcpServers": {
     "signal": {
-      "command": "uv",
+      "command": "signal-mcp",
       "args": [
-        "run",
-        "--directory", "/ABSOLUTE/PATH/TO/signal-mcp",
-        "signal-mcp",
         "--operator", "+15551234567",
         "--transport", "stdio"
       ],
@@ -361,8 +363,7 @@ launch command):
 ```bash
 claude mcp add signal \
   --env SIGNAL_MCP_TRUSTED_RECIPIENTS=+15555550101 \
-  -- uv run --directory /ABSOLUTE/PATH/TO/signal-mcp \
-     signal-mcp --operator +15551234567 --transport stdio
+  -- signal-mcp --operator +15551234567 --transport stdio
 ```
 
 Use `--scope user` to make it available across all your projects (the default
@@ -452,7 +453,7 @@ sources and you only want Claude to see a subset — for example, only messages
 prefixed with `claude`:
 
 ```bash
-uv run signal-mcp --operator YOUR_PHONE_NUMBER --channel --prefix "claude"
+signal-mcp --operator YOUR_PHONE_NUMBER --channel --prefix "claude"
 ```
 
 ### Claude Code channel setup
@@ -463,16 +464,14 @@ Add the server with the `--channel` flag:
 claude mcp add signal \
   --scope user \
   --env SIGNAL_MCP_TRUSTED_RECIPIENTS=+15555550101 \
-  -- uv run --directory /ABSOLUTE/PATH/TO/signal-mcp \
-     signal-mcp --operator +15551234567 --channel
+  -- signal-mcp --operator +15551234567 --channel
 ```
 
 The `--prefix` flag is optional — add it if you want selective forwarding:
 
 ```bash
 claude mcp add signal \
-  -- uv run --directory /ABSOLUTE/PATH/TO/signal-mcp \
-     signal-mcp --operator +15551234567 --channel --prefix "claude"
+  -- signal-mcp --operator +15551234567 --channel --prefix "claude"
 ```
 
 ## Tools
@@ -786,7 +785,13 @@ because the argument is declared `required: true`.
 
 ## Development
 
+Working on signal-mcp itself (rather than just running it) is the one case that
+wants a checkout:
+
 ```bash
+git clone https://github.com/joestump/signal-mcp.git
+cd signal-mcp
+
 uv run ruff check .          # lint
 uv run ruff format --check . # formatting
 uv run mypy .                # type check

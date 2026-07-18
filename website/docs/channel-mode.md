@@ -43,7 +43,7 @@ Claude sees the message as a `<channel>` tag in its conversation context (Crush 
 Add the `--channel` flag (or set the `SIGNAL_CHANNEL` environment variable):
 
 ```bash
-uv run signal_mcp/main.py --operator YOUR_PHONE_NUMBER --channel
+signal-mcp --operator YOUR_PHONE_NUMBER --channel
 ```
 
 Or in your MCP config (`~/.claude.json` or `.mcp.json`):
@@ -53,13 +53,8 @@ Or in your MCP config (`~/.claude.json` or `.mcp.json`):
   "mcpServers": {
     "signal": {
       "type": "stdio",
-      "command": "uv",
+      "command": "signal-mcp",
       "args": [
-        "run",
-        "--directory",
-        "/path/to/signal-mcp",
-        "python",
-        "signal_mcp/main.py",
         "--operator",
         "+15551234567",
         "--channel"
@@ -87,7 +82,7 @@ Channel mode pushes message text straight into your agent's context, so inbound 
 To let other people through, configure the allowlist with the repeatable `--trusted-sender` flag or the comma-separated `SIGNAL_MCP_TRUSTED_SENDERS` environment variable:
 
 ```bash
-uv run signal_mcp/main.py --operator +15551234567 --channel \
+signal-mcp --operator +15551234567 --channel \
     --trusted-sender +15551234567 \
     --trusted-sender +15555550101
 ```
@@ -113,7 +108,7 @@ In normal (polling) mode the same filter applies to `receive_message`, but only 
 If you use Note to Self for things other than Claude, set a prefix so only tagged messages are forwarded. The prefix is stripped before delivery:
 
 ```bash
-uv run signal_mcp/main.py --operator YOUR_PHONE_NUMBER --channel --prefix cc
+signal-mcp --operator YOUR_PHONE_NUMBER --channel --prefix cc
 ```
 
 Or via environment variable:

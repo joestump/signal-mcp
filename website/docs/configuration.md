@@ -20,10 +20,10 @@ to different values when the agent has its **own** number:
 
 ```bash
 # Personal machine — account == operator == you (Note to Self)
-uv run signal-mcp --operator +15551234567
+signal-mcp --operator +15551234567
 
 # Dedicated agent — sends FROM the agent number TO you
-uv run signal-mcp --account +353871760709 --operator +15551234567 --transport stdio
+signal-mcp --account +353871760709 --operator +15551234567 --transport stdio
 ```
 
 These are distinct from the [allowlists](#trusted-recipients--senders), which are
@@ -71,7 +71,7 @@ The two allowlists are **security gates**, not address books:
 ### Minimal (SSE, Note to Self)
 
 ```bash
-uv run signal-mcp --operator +15551234567
+signal-mcp --operator +15551234567
 ```
 
 ### Claude Code (stdio, dedicated agent number)
@@ -81,12 +81,8 @@ uv run signal-mcp --operator +15551234567
   "mcpServers": {
     "signal": {
       "type": "stdio",
-      "command": "uv",
+      "command": "signal-mcp",
       "args": [
-        "run",
-        "--directory",
-        "/path/to/signal-mcp",
-        "signal-mcp",
         "--account",
         "+353871760709",
         "--operator",
@@ -106,12 +102,8 @@ uv run signal-mcp --operator +15551234567
   "mcpServers": {
     "signal": {
       "type": "stdio",
-      "command": "uv",
+      "command": "signal-mcp",
       "args": [
-        "run",
-        "--directory",
-        "/path/to/signal-mcp",
-        "signal-mcp",
         "--operator",
         "+15551234567",
         "--channel",
@@ -127,7 +119,7 @@ uv run signal-mcp --operator +15551234567
 
 ```bash
 SIGNAL_MCP_RPC_HOST=10.0.0.5 SIGNAL_MCP_RPC_PORT=9090 \
-  uv run signal-mcp --operator +15551234567
+  signal-mcp --operator +15551234567
 ```
 
 ## signal-cli daemon setup
