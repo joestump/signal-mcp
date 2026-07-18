@@ -1,11 +1,31 @@
 .features {
-  display: flex;
-  align-items: center;
-  padding: 2rem 0;
-  width: 100%;
+  max-width: 1120px;
+  margin: 0 auto;
+  padding: var(--sig-space-8) var(--sig-space-6);
 }
 
-.featureSvg {
-  height: 200px;
-  width: 200px;
+.featuresHeader {
+  text-align: center;
+  max-width: 40rem;
+  margin: 0 auto var(--sig-space-7);
+}
+
+.featuresTitle {
+  font-size: clamp(2rem, 4vw, 2.75rem);
+  font-weight: 800;
+  letter-spacing: -0.03em;
+  line-height: 1.08;
+  margin: var(--sig-space-2) 0 0;
+}
+
+.featuresGrid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: var(--sig-space-5);
+}
+
+@media screen and (max-width: 996px) {
+  .featuresGrid {
+    grid-template-columns: 1fr;
+  }
 }

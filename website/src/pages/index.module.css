@@ -1,23 +1,128 @@
 /**
- * CSS files with the .module.css suffix will be treated as CSS modules
- * and scoped locally.
+ * Homepage layout, matching the SignalMcpSite mockup: wash-gradient hero with
+ * a chat-thread card, then feature tiles, then an ink CTA band.
  */
 
-.heroBanner {
-  padding: 4rem 0;
-  text-align: center;
+.hero {
   position: relative;
   overflow: hidden;
+  background: linear-gradient(180deg, var(--sig-wash) 0%, var(--sig-bg) 100%);
+  border-bottom: 1px solid var(--sig-border);
+}
+
+.heroInner {
+  max-width: 1120px;
+  margin: 0 auto;
+  padding: var(--sig-space-8) var(--sig-space-6);
+  display: grid;
+  grid-template-columns: 1.1fr 0.9fr;
+  gap: var(--sig-space-8);
+  align-items: center;
+}
+
+.heroCopy {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sig-space-5);
+}
+
+.heroSubtitle {
+  font-size: 1.2rem;
+  color: var(--sig-text-muted);
+  max-width: 34rem;
+  margin: 0;
+}
+
+.heroButtons {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sig-space-3);
+}
+
+.heroBadges {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sig-space-2);
+}
+
+/* Chat thread card */
+.thread {
+  max-width: 26rem;
+  width: 100%;
+  margin-left: auto;
+  box-shadow: var(--sig-shadow-lg);
+}
+
+.threadHeader {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding-bottom: var(--sig-space-3);
+  border-bottom: 1px solid var(--sig-border);
+  margin-bottom: var(--sig-space-2);
+}
+
+.threadName {
+  font-weight: 700;
+  font-size: 0.9rem;
+  color: var(--sig-text-strong);
+}
+
+.threadVia {
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: var(--sig-text-muted);
+}
+
+/* CTA band */
+.cta {
+  background: var(--sig-ink);
+  border-top: 1px solid var(--sig-border);
+  color: #fff;
+}
+
+.ctaInner {
+  max-width: 1120px;
+  margin: 0 auto;
+  padding: var(--sig-space-8) var(--sig-space-6);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sig-space-6);
+  flex-wrap: wrap;
+}
+
+.ctaTitle {
+  font-size: 2rem;
+  font-weight: 800;
+  letter-spacing: -0.03em;
+  color: #fff;
+  margin: 0 0 0.5rem;
+}
+
+.ctaBody {
+  color: var(--sig-gray-300);
+  margin: 0;
+  font-size: 1.05rem;
+}
+
+.ctaButtons {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sig-space-3);
 }
 
 @media screen and (max-width: 996px) {
-  .heroBanner {
-    padding: 2rem;
+  .heroInner {
+    grid-template-columns: 1fr;
+    gap: var(--sig-space-6);
+    padding: var(--sig-space-6) var(--sig-space-5);
   }
-}
 
-.buttons {
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  .thread {
+    margin-left: 0;
+  }
 }

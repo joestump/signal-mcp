@@ -2,10 +2,19 @@ import {themes as prismThemes} from 'prism-react-renderer';
 import type {Config} from '@docusaurus/types';
 import type * as Preset from '@docusaurus/preset-classic';
 
+// Signal code panel: vsDark colors on the design system's ink surface.
+const signalCodeTheme = {
+  ...prismThemes.vsDark,
+  plain: {
+    ...prismThemes.vsDark.plain,
+    backgroundColor: '#17171b',
+  },
+};
+
 const config: Config = {
   title: 'Signal MCP',
-  tagline: 'Send and receive Signal messages from any AI agent',
-  favicon: 'img/favicon.ico',
+  tagline: 'Give your AI agents a Signal.',
+  favicon: 'img/favicon.svg',
 
   future: {
     v4: true,
@@ -18,12 +27,36 @@ const config: Config = {
   projectName: 'signal-mcp',
 
   onBrokenLinks: 'throw',
-  onBrokenMarkdownLinks: 'warn',
+
+  markdown: {
+    hooks: {
+      onBrokenMarkdownLinks: 'warn',
+    },
+  },
 
   i18n: {
     defaultLocale: 'en',
     locales: ['en'],
   },
+
+  stylesheets: [
+    'https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap',
+  ],
+
+  headTags: [
+    {
+      tagName: 'link',
+      attributes: {rel: 'preconnect', href: 'https://fonts.googleapis.com'},
+    },
+    {
+      tagName: 'link',
+      attributes: {
+        rel: 'preconnect',
+        href: 'https://fonts.gstatic.com',
+        crossorigin: 'anonymous',
+      },
+    },
+  ],
 
   presets: [
     [
@@ -46,59 +79,56 @@ const config: Config = {
     },
     navbar: {
       title: 'Signal MCP',
+      logo: {
+        alt: 'Signal MCP',
+        src: 'img/logo.svg',
+      },
       items: [
         {
-          type: 'docSidebar',
-          sidebarId: 'docs',
+          to: '/docs/intro',
+          label: 'Guides',
           position: 'left',
-          label: 'Docs',
+          activeBaseRegex: 'docs/(intro|installation|channel-mode)',
+        },
+        {
+          to: '/docs/tools',
+          label: 'API Reference',
+          position: 'left',
+          activeBaseRegex: 'docs/(tools|configuration)',
         },
         {
           href: 'https://github.com/joestump/signal-mcp',
-          label: 'GitHub',
           position: 'right',
+          className: 'header-github-link',
+          'aria-label': 'GitHub repository',
         },
       ],
     },
     footer: {
-      style: 'dark',
+      style: 'light',
       links: [
         {
-          title: 'Docs',
           items: [
             {
-              label: 'Getting Started',
+              label: 'Docs',
               to: '/docs/intro',
             },
             {
-              label: 'Claude Channel',
-              to: '/docs/channel-mode',
+              label: 'API',
+              to: '/docs/tools',
             },
-          ],
-        },
-        {
-          title: 'Community',
-          items: [
             {
               label: 'GitHub',
               href: 'https://github.com/joestump/signal-mcp',
             },
-            {
-              label: 'signal-cli',
-              href: 'https://github.com/AsamK/signal-cli',
-            },
-            {
-              label: 'MCP Protocol',
-              href: 'https://github.com/mcp-signal/mcp',
-            },
           ],
         },
       ],
-      copyright: `Copyright © ${new Date().getFullYear()} Signal MCP. Built with Docusaurus.`,
+      copyright: 'Signal MCP — maintained fork · MIT License',
     },
     prism: {
-      theme: prismThemes.github,
-      darkTheme: prismThemes.dracula,
+      theme: signalCodeTheme,
+      darkTheme: signalCodeTheme,
       additionalLanguages: ['python', 'bash', 'json'],
     },
   } satisfies Preset.ThemeConfig,
