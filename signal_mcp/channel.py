@@ -30,6 +30,12 @@ via Signal, and you can message them back.
 
 Inbound messages from Signal arrive as <channel source="signal" sender="..." \
 sender_name="..." group="...">. The body text is the content.
+The notification's ``meta`` object carries the sender's Signal identifier as
+``sender`` (use it as ``user_id`` for ``send_message_to_user``), ``sender_name``
+when known, ``group`` when set, and ``timestamp`` — the inbound message's
+Signal timestamp. Pass ``timestamp`` back as ``target_timestamp`` to
+``send_reaction_to_user`` (or ``send_reaction_to_group``) to react to that
+specific message.
 Messages may carry file attachments, delivered as annotation lines in the
 body like [attachment: /path/to/file (image/jpeg, 245 KB)]. The path is a
 local file — open it with your Read tool (images render natively). When S3
@@ -113,7 +119,10 @@ def _base_meta(msg: MessageResponse) -> dict[str, str]:
     """Build the ``meta`` fields common to every channel event.
 
     ``sender`` is always present (empty string when unknown); ``sender_name``
-    and ``group`` are added only when set. Callers may extend the returned dict
+    and ``group`` are added only when set. ``timestamp`` carries the inbound
+    message's Signal timestamp as a string — it is the value to pass back as
+    ``target_timestamp`` to ``send_reaction_to_user`` / ``send_reaction_to_group``
+    to react to this specific message. Callers may extend the returned dict
     with event-specific fields (e.g. reaction details).
     """
     meta: dict[str, str] = {"sender": msg.sender_id or ""}
@@ -121,6 +130,8 @@ def _base_meta(msg: MessageResponse) -> dict[str, str]:
         meta["sender_name"] = msg.sender_name
     if msg.group_id:
         meta["group"] = msg.group_id
+    if msg.timestamp is not None:
+        meta["timestamp"] = str(msg.timestamp)
     return meta
 
 
