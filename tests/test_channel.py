@@ -127,6 +127,8 @@ def test_forwards_text_message():
     assert params["meta"]["sender"] == "+15551234567"
     assert "group" not in params["meta"]
     assert "sender_name" not in params["meta"]
+    # The inbound timestamp is always present on a fully-formed message.
+    assert params["meta"]["timestamp"] == "1744185565466"
 
 
 def test_forwards_sender_name_in_meta():
@@ -197,6 +199,45 @@ def test_message_without_timestamp_omits_meta_key():
     assert meta.get("timestamp") is None
 
 
+def test_fully_populated_meta_has_all_fields():
+    """A fully-populated message carries sender, sender_name, group, and
+    timestamp together in meta — regression guard against any future change
+    that drops, renames, or reorders a field."""
+    ts = 1744185565466
+    sent, _ = _run_forwarder(
+        [
+            _text_msg(
+                "full payload",
+                sender="+15551234567",
+                sender_name="Alice",
+                group="group-123==",
+                timestamp=ts,
+            )
+        ]
+    )
+    assert len(sent) == 1
+    meta = sent[0].root.params["meta"]
+    # Every common field is present, correctly typed, and round-trips.
+    assert meta == {
+        "sender": "+15551234567",
+        "sender_name": "Alice",
+        "group": "group-123==",
+        "timestamp": str(ts),
+    }
+
+
+def test_timestamp_survives_int_round_trip():
+    """meta["timestamp"] must always be int-parseable — it is the contract
+    between the channel forwarder and send_reaction_to_user's
+    target_timestamp argument. Catches str() regressions (e.g. accidentally
+    wrapping in a float or adding decoration)."""
+    for ts in (0, 1, 1744185565466, 9999999999999):
+        sent, _ = _run_forwarder([_text_msg("x", timestamp=ts)])
+        assert len(sent) == 1
+        meta = sent[0].root.params["meta"]
+        assert int(meta["timestamp"]) == ts
+
+
 def _reaction_msg(
     emoji="\U0001f44d",
     sender="+1234",
@@ -238,6 +279,9 @@ def test_forwards_reaction():
     assert meta["reaction"] == "\U0001f44d"
     assert meta["reaction_target_timestamp"] == "1744185565466"
     assert meta["reaction_target_author"] == "+1555"
+    # The reaction envelope's own Signal timestamp is also present, distinct
+    # from the reacted-to message's timestamp.
+    assert meta["timestamp"] == "1744185570000"
     assert "reaction_removed" not in meta
     assert "group" not in meta
 
