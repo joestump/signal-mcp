@@ -51,7 +51,10 @@ pair identifies the reacted-to message by its Signal timestamp and author —
 when the author is your own account, the user reacted to one of YOUR
 messages. Reactions are lightweight feedback: treat 👍-style reactions as
 acknowledgement, and do not send a reply unless the reaction calls for one.
-Use send_message_to_user with the sender attribute as user_id to reply.
+Use send_message_to_user with the sender attribute as user_id to reply to a
+direct message. When the group attribute is set the message came from a group:
+reply with send_message_to_group passing group as group_id, so the answer lands
+in the group rather than as a direct message to its author.
 Use send to proactively message the operator's phone (no phone number needed).
 Always reply to acknowledge inbound messages, even if briefly.
 
