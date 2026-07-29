@@ -101,6 +101,40 @@ def test_channel_instructions_include_formatting_rules() -> None:
     assert "send_message_to_user" in CHANNEL_INSTRUCTIONS
 
 
+def test_channel_instructions_route_group_replies_to_the_group() -> None:
+    """Group pushes must be answered in the group, not as a DM to the author.
+
+    The instructions are the only thing telling the model which send tool to
+    use: a client reads them from the initialize result and puts them in the
+    system prompt. Without an explicit group route the model falls back to
+    send_message_to_user and answers a group message privately.
+    """
+    assert "send_message_to_group" in CHANNEL_INSTRUCTIONS
+    # The group id the model must pass back is the "group" meta attribute.
+    assert "group as group_id" in CHANNEL_INSTRUCTIONS
+
+
+def test_channel_instructions_route_reactions_by_scope() -> None:
+    """Reacting needs a group route too, and both reaction tools need an author."""
+    assert "send_reaction_to_group with group_id=group" in CHANNEL_INSTRUCTIONS
+    assert "send_reaction_to_user with user_id=sender" in CHANNEL_INSTRUCTIONS
+    # target_author is required by both tools but was never documented.
+    assert "target_author" in CHANNEL_INSTRUCTIONS
+
+
+def test_channel_instructions_distinguish_reaction_timestamps() -> None:
+    """A reaction event's own timestamp is not the reacted-to message's.
+
+    meta carries both ``timestamp`` (the reaction envelope) and
+    ``reaction_target_timestamp`` (the message it points at). Telling the
+    model to reuse ``timestamp`` makes a reply-reaction attach to nothing,
+    which is invisible to the user rather than an error.
+    """
+    assert "reaction_target_timestamp" in CHANNEL_INSTRUCTIONS
+    assert "reaction_target_author" in CHANNEL_INSTRUCTIONS
+    assert "reaction_removed" in CHANNEL_INSTRUCTIONS
+
+
 def test_prompts_capability_advertised_in_default_modes() -> None:
     """sse/stdio initialization options advertise the prompts capability."""
     options = mcp._mcp_server.create_initialization_options()
