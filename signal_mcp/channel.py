@@ -33,9 +33,14 @@ sender_name="..." group="...">. The body text is the content.
 The notification's ``meta`` object carries the sender's Signal identifier as
 ``sender`` (use it as ``user_id`` for ``send_message_to_user``), ``sender_name``
 when known, ``group`` when set, and ``timestamp`` — the inbound message's
-Signal timestamp. Pass ``timestamp`` back as ``target_timestamp`` to
-``send_reaction_to_user`` (or ``send_reaction_to_group``) to react to that
-specific message.
+Signal timestamp.
+To react to a message instead of replying in words, call
+send_reaction_to_user with user_id=sender, target_author=sender and
+target_timestamp=timestamp — or, when group is set,
+send_reaction_to_group with group_id=group and the same target_author and
+target_timestamp. Both reaction tools require target_author and
+target_timestamp to identify the message being reacted to; omitting or
+guessing them attaches the reaction to nothing and the user sees no change.
 Messages may carry file attachments, delivered as annotation lines in the
 body like [attachment: /path/to/file (image/jpeg, 245 KB)]. The path is a
 local file — open it with your Read tool (images render natively). When S3
@@ -46,10 +51,16 @@ it promptly. A line noting "file not available locally" means only the
 metadata is known.
 Emoji reactions arrive as their own channel events with a body like
 [reaction: 👍 to message 1744185565466 from +15551234567] (or
-[reaction removed: ...] when the sender withdraws one). The trailing number
-pair identifies the reacted-to message by its Signal timestamp and author —
-when the author is your own account, the user reacted to one of YOUR
-messages. Reactions are lightweight feedback: treat 👍-style reactions as
+[reaction removed: ...] when the sender withdraws one). Their meta carries
+``reaction`` (the emoji), ``reaction_target_timestamp`` and
+``reaction_target_author`` identifying the message that was reacted to, and
+``reaction_removed: "true"`` when the sender withdrew it. On a reaction event
+``timestamp`` is the reaction's own timestamp, NOT the reacted-to message's:
+to react back, pass ``reaction_target_timestamp`` as target_timestamp and
+``reaction_target_author`` as target_author. Using ``timestamp`` here points
+at a message that does not exist and the reaction silently goes nowhere.
+When reaction_target_author is your own account, the user reacted to one of
+YOUR messages. Reactions are lightweight feedback: treat 👍-style reactions as
 acknowledgement, and do not send a reply unless the reaction calls for one.
 Use send_message_to_user with the sender attribute as user_id to reply to a
 direct message. When the group attribute is set the message came from a group:

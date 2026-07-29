@@ -114,6 +114,27 @@ def test_channel_instructions_route_group_replies_to_the_group() -> None:
     assert "group as group_id" in CHANNEL_INSTRUCTIONS
 
 
+def test_channel_instructions_route_reactions_by_scope() -> None:
+    """Reacting needs a group route too, and both reaction tools need an author."""
+    assert "send_reaction_to_group with group_id=group" in CHANNEL_INSTRUCTIONS
+    assert "send_reaction_to_user with user_id=sender" in CHANNEL_INSTRUCTIONS
+    # target_author is required by both tools but was never documented.
+    assert "target_author" in CHANNEL_INSTRUCTIONS
+
+
+def test_channel_instructions_distinguish_reaction_timestamps() -> None:
+    """A reaction event's own timestamp is not the reacted-to message's.
+
+    meta carries both ``timestamp`` (the reaction envelope) and
+    ``reaction_target_timestamp`` (the message it points at). Telling the
+    model to reuse ``timestamp`` makes a reply-reaction attach to nothing,
+    which is invisible to the user rather than an error.
+    """
+    assert "reaction_target_timestamp" in CHANNEL_INSTRUCTIONS
+    assert "reaction_target_author" in CHANNEL_INSTRUCTIONS
+    assert "reaction_removed" in CHANNEL_INSTRUCTIONS
+
+
 def test_prompts_capability_advertised_in_default_modes() -> None:
     """sse/stdio initialization options advertise the prompts capability."""
     options = mcp._mcp_server.create_initialization_options()
