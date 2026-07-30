@@ -141,8 +141,8 @@ def test_forwarder_forwards_allowlisted_sender(monkeypatch):
     monkeypatch.setattr(config, "trusted_senders", frozenset({ALICE}))
     sent, fake = _run_forwarder([_text_msg("hello", sender=ALICE)])
     assert len(sent) == 1
-    assert sent[0].root.params["content"] == "hello"
-    assert sent[0].root.params["meta"]["sender"] == ALICE
+    assert sent[0].message.root.params["content"] == "hello"
+    assert sent[0].message.root.params["meta"]["sender"] == ALICE
     receipts = _receipts(fake)
     assert len(receipts) == 1
     assert receipts[0]["recipient"] == [ALICE]
@@ -171,8 +171,8 @@ def test_forwarder_gates_group_message_by_author(monkeypatch):
         ]
     )
     assert len(sent) == 1
-    assert sent[0].root.params["meta"]["sender"] == ALICE
-    assert sent[0].root.params["meta"]["group"] == GROUP
+    assert sent[0].message.root.params["meta"]["sender"] == ALICE
+    assert sent[0].message.root.params["meta"]["group"] == GROUP
     receipts = _receipts(fake)
     assert len(receipts) == 1
     assert receipts[0]["recipient"] == [ALICE]
@@ -188,7 +188,7 @@ def test_channel_default_forwards_only_operator(monkeypatch):
         ]
     )
     assert len(sent) == 1
-    assert sent[0].root.params["meta"]["sender"] == OPERATOR
+    assert sent[0].message.root.params["meta"]["sender"] == OPERATOR
     receipts = _receipts(fake)
     assert len(receipts) == 1
     assert receipts[0]["recipient"] == [OPERATOR]

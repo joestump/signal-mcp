@@ -8,10 +8,12 @@ them as ``notifications/claude/channel`` JSON-RPC notifications over stdio.
 import asyncio
 import contextlib
 import logging
+import os
 import re
 from typing import Any
 
 from mcp.server.stdio import stdio_server
+from mcp.shared.message import SessionMessage
 from mcp.types import JSONRPCMessage, JSONRPCNotification
 
 from signal_mcp import s3
@@ -149,22 +151,27 @@ def _base_meta(msg: MessageResponse) -> dict[str, str]:
     return meta
 
 
-def _channel_notification(content: str, meta: dict[str, str]) -> JSONRPCMessage:
+def _channel_notification(content: str, meta: dict[str, str]) -> SessionMessage:
     """Wrap ``content`` and ``meta`` in a ``notifications/claude/channel`` event.
 
     The single place the channel notification shape is constructed, so text
-    messages and reactions stay in lockstep.
+    messages and reactions stay in lockstep. Returns a ``SessionMessage``
+    because that is what the SDK's stdio write stream carries — its stdout
+    writer dereferences ``.message``, so a bare ``JSONRPCMessage`` would
+    crash the transport.
     """
-    return JSONRPCMessage(
-        root=JSONRPCNotification(
-            jsonrpc="2.0",
-            method="notifications/claude/channel",
-            params={"content": content, "meta": meta},
+    return SessionMessage(
+        JSONRPCMessage(
+            root=JSONRPCNotification(
+                jsonrpc="2.0",
+                method="notifications/claude/channel",
+                params={"content": content, "meta": meta},
+            )
         )
     )
 
 
-def _reaction_notification(msg: MessageResponse) -> JSONRPCMessage | None:
+def _reaction_notification(msg: MessageResponse) -> SessionMessage | None:
     """Build the channel notification for an inbound emoji reaction.
 
     The body is a single annotation line in the same bracketed style as
@@ -356,6 +363,19 @@ async def run_channel_async() -> None:
         forwarder = asyncio.create_task(_forward_channel_messages(write_stream))
         try:
             await mcp._mcp_server.run(read_stream, write_stream, init_options)
+        except Exception:
+            # A fatal MCP session error must not leave a half-dead process.
+            # The clean unwind can block indefinitely: stdio_server teardown
+            # waits on its synchronous stdin reader thread, which only
+            # returns on the next line of input or EOF — meanwhile the
+            # process holds stdio open with the session gone, and clients
+            # wait out their entire connect timeout with no response and no
+            # EOF (issue #45). Exit hard so they see EOF immediately; the
+            # skipped cleanup (forwarder task, daemon socket) dies with the
+            # process anyway.
+            logger.exception("MCP session died; exiting so clients see EOF")
+            logging.shutdown()
+            os._exit(1)
         finally:
             forwarder.cancel()
             with contextlib.suppress(asyncio.CancelledError):

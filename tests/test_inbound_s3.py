@@ -311,7 +311,7 @@ def test_forwarder_content_carries_presigned_url(monkeypatch):
     sent, _ = _run_forwarder([msg])
 
     assert len(sent) == 1
-    content = sent[0].root.params["content"]
+    content = sent[0].message.root.params["content"]
     assert content.startswith("look\n[attachment: https://cdn.example/")
     assert content.endswith("(image/png, 245 KB)]")
 
@@ -332,7 +332,7 @@ def test_forwarder_falls_back_and_still_delivers_on_upload_failure(monkeypatch):
     sent, fake = _run_forwarder([msg])
 
     assert len(sent) == 1  # message NOT dropped by the S3 failure
-    content = sent[0].root.params["content"]
+    content = sent[0].message.root.params["content"]
     assert content == (
         "look\n[attachment: /tmp/attachments/abc123.png (image/png, 245 KB)]"
     )
@@ -359,6 +359,6 @@ def test_forwarder_no_upload_when_s3_disabled(monkeypatch):
     sent, _ = _run_forwarder([msg])
 
     assert called is False
-    assert sent[0].root.params["content"] == (
+    assert sent[0].message.root.params["content"] == (
         "look\n[attachment: /tmp/attachments/abc123.png (image/png, 245 KB)]"
     )

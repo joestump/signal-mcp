@@ -320,7 +320,7 @@ def test_forwarder_retries_until_daemon_available(monkeypatch):
 
     assert flaky._remaining == 0  # all failures were retried
     assert len(stream.sent) == 1
-    assert stream.sent[0].root.params["content"] == "finally"
+    assert stream.sent[0].message.root.params["content"] == "finally"
 
 
 class DisconnectingClient:
@@ -596,7 +596,7 @@ def test_forwarder_survives_notification_send_error(monkeypatch):
 
     # The first message's send raised (and was dropped); the loop recovered and
     # delivered the second — the forwarder did not crash.
-    assert [n.root.params["content"] for n in stream.sent] == ["two"]
+    assert [n.message.root.params["content"] for n in stream.sent] == ["two"]
 
 
 # ---------------------------------------------------------------------------

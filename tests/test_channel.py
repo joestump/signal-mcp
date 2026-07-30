@@ -118,7 +118,7 @@ def test_forwards_text_message():
     """A plain text message is forwarded as a channel notification."""
     sent, _ = _run_forwarder([_text_msg("hello world", sender="+15551234567")])
     assert len(sent) == 1
-    notif = sent[0].root
+    notif = sent[0].message.root
     assert isinstance(notif, JSONRPCNotification)
     assert notif.method == "notifications/claude/channel"
     params = notif.params
@@ -137,14 +137,14 @@ def test_forwards_sender_name_in_meta():
         [_text_msg("hello", sender="+15551234567", sender_name="Bob Sagat")]
     )
     assert len(sent) == 1
-    assert sent[0].root.params["meta"]["sender_name"] == "Bob Sagat"
+    assert sent[0].message.root.params["meta"]["sender_name"] == "Bob Sagat"
 
 
 def test_forwards_group_message_with_meta():
     """Group messages include the group id in meta."""
     sent, _ = _run_forwarder([_text_msg("hi team", sender="+111", group="group-123==")])
     assert len(sent) == 1
-    assert sent[0].root.params["meta"]["group"] == "group-123=="
+    assert sent[0].message.root.params["meta"]["group"] == "group-123=="
 
 
 def test_message_meta_includes_timestamp():
@@ -155,7 +155,7 @@ def test_message_meta_includes_timestamp():
         [_text_msg("react to me", sender="+15551234567", timestamp=ts)]
     )
     assert len(sent) == 1
-    meta = sent[0].root.params["meta"]
+    meta = sent[0].message.root.params["meta"]
     assert meta["timestamp"] == str(ts)
     # It must be the same value the reaction tool expects as target_timestamp.
     assert int(meta["timestamp"]) == ts
@@ -166,7 +166,7 @@ def test_attachment_message_meta_includes_timestamp():
     ts = 1744185565466
     sent, _ = _run_forwarder([_attachment_msg(timestamp=ts)])
     assert len(sent) == 1
-    assert sent[0].root.params["meta"]["timestamp"] == str(ts)
+    assert sent[0].message.root.params["meta"]["timestamp"] == str(ts)
 
 
 def test_reaction_event_meta_includes_own_timestamp():
@@ -175,7 +175,7 @@ def test_reaction_event_meta_includes_own_timestamp():
     which identifies the message that was reacted to)."""
     sent, _ = _run_forwarder([_reaction_msg()])
     assert len(sent) == 1
-    meta = sent[0].root.params["meta"]
+    meta = sent[0].message.root.params["meta"]
     # _reaction_msg builds the envelope with timestamp=1744185570000.
     assert meta["timestamp"] == "1744185570000"
     # The reacted-to message's timestamp is still exposed separately.
@@ -193,7 +193,7 @@ def test_message_without_timestamp_omits_meta_key():
     )
     sent, _ = _run_forwarder([msg])
     assert len(sent) == 1
-    meta = sent[0].root.params["meta"]
+    meta = sent[0].message.root.params["meta"]
     assert "timestamp" not in meta
     # And no null/None leaks through.
     assert meta.get("timestamp") is None
@@ -216,7 +216,7 @@ def test_fully_populated_meta_has_all_fields():
         ]
     )
     assert len(sent) == 1
-    meta = sent[0].root.params["meta"]
+    meta = sent[0].message.root.params["meta"]
     # Every common field is present, correctly typed, and round-trips.
     assert meta == {
         "sender": "+15551234567",
@@ -234,7 +234,7 @@ def test_timestamp_survives_int_round_trip():
     for ts in (0, 1, 1744185565466, 9999999999999):
         sent, _ = _run_forwarder([_text_msg("x", timestamp=ts)])
         assert len(sent) == 1
-        meta = sent[0].root.params["meta"]
+        meta = sent[0].message.root.params["meta"]
         assert int(meta["timestamp"]) == ts
 
 
@@ -265,7 +265,7 @@ def test_forwards_reaction():
     """An emoji reaction is forwarded as its own channel event."""
     sent, _ = _run_forwarder([_reaction_msg(sender="+15551234567", sender_name="Joe")])
     assert len(sent) == 1
-    notif = sent[0].root
+    notif = sent[0].message.root
     assert isinstance(notif, JSONRPCNotification)
     assert notif.method == "notifications/claude/channel"
     params = notif.params
@@ -290,7 +290,7 @@ def test_forwards_reaction_removal():
     """Withdrawing a reaction forwards as a 'reaction removed' event."""
     sent, _ = _run_forwarder([_reaction_msg(is_remove=True)])
     assert len(sent) == 1
-    params = sent[0].root.params
+    params = sent[0].message.root.params
     assert params["content"].startswith("[reaction removed: \U0001f44d")
     assert params["meta"]["reaction_removed"] == "true"
 
@@ -299,7 +299,7 @@ def test_forwards_group_reaction_with_meta():
     """A reaction in a group carries the group id like any channel event."""
     sent, _ = _run_forwarder([_reaction_msg(group="group-123==")])
     assert len(sent) == 1
-    assert sent[0].root.params["meta"]["group"] == "group-123=="
+    assert sent[0].message.root.params["meta"]["group"] == "group-123=="
 
 
 def test_reaction_sends_no_read_receipt():
@@ -320,7 +320,7 @@ def test_reaction_without_target_still_forwards():
     """Sync edge cases may omit the target; the emoji alone still forwards."""
     sent, _ = _run_forwarder([_reaction_msg(target_author=None, target_timestamp=None)])
     assert len(sent) == 1
-    params = sent[0].root.params
+    params = sent[0].message.root.params
     assert params["content"] == "[reaction: \U0001f44d]"
     assert "reaction_target_timestamp" not in params["meta"]
     assert "reaction_target_author" not in params["meta"]
@@ -342,7 +342,7 @@ def test_reaction_bypasses_prefix_filter():
         prefix="cc",
     )
     assert len(sent) == 1
-    assert sent[0].root.params["meta"]["reaction"] == "\U0001f44d"
+    assert sent[0].message.root.params["meta"]["reaction"] == "\U0001f44d"
 
 
 def test_prefix_filters_and_strips():
@@ -356,8 +356,8 @@ def test_prefix_filters_and_strips():
         prefix="cc",
     )
     assert len(sent) == 2
-    assert sent[0].root.params["content"] == "run tests"
-    assert sent[1].root.params["content"] == "deploy now"
+    assert sent[0].message.root.params["content"] == "run tests"
+    assert sent[1].message.root.params["content"] == "deploy now"
 
 
 def test_prefix_requires_word_boundary():
@@ -370,7 +370,7 @@ def test_prefix_requires_word_boundary():
         prefix="cc",
     )
     assert len(sent) == 1
-    assert sent[0].root.params["content"] == "deploy now"
+    assert sent[0].message.root.params["content"] == "deploy now"
 
 
 def test_strip_prefix_word_boundary_cases():
@@ -387,7 +387,7 @@ def test_strip_prefix_word_boundary_cases():
 def test_notification_is_valid_jsonrpc():
     """The notification serializes to valid JSON-RPC 2.0."""
     sent, _ = _run_forwarder([_text_msg("test")])
-    raw = sent[0].model_dump(by_alias=True, exclude_none=True)
+    raw = sent[0].message.model_dump(by_alias=True, exclude_none=True)
     assert raw["jsonrpc"] == "2.0"
     assert raw["method"] == "notifications/claude/channel"
     assert "content" in raw["params"]
@@ -477,7 +477,7 @@ def test_forwards_image_with_caption():
     """Image + caption: content is the caption plus one annotation line."""
     sent, _ = _run_forwarder([_attachment_msg(text="look at this")])
     assert len(sent) == 1
-    assert sent[0].root.params["content"] == (
+    assert sent[0].message.root.params["content"] == (
         "look at this\n[attachment: /tmp/attachments/abc123.png (image/png, 245 KB)]"
     )
 
@@ -486,7 +486,7 @@ def test_forwards_attachment_only_message():
     """A message with attachments but no text forwards as annotation only."""
     sent, _ = _run_forwarder([_attachment_msg()])
     assert len(sent) == 1
-    assert sent[0].root.params["content"] == (
+    assert sent[0].message.root.params["content"] == (
         "[attachment: /tmp/attachments/abc123.png (image/png, 245 KB)]"
     )
 
@@ -511,7 +511,7 @@ def test_forwards_multiple_attachments_one_line_each():
         ]
     )
     assert len(sent) == 1
-    assert sent[0].root.params["content"] == (
+    assert sent[0].message.root.params["content"] == (
         "two files\n"
         "[attachment: /tmp/attachments/abc123.png (image/png, 245 KB)]\n"
         "[attachment: /tmp/attachments/doc.pdf (application/pdf, 1.5 KB)]"
@@ -522,7 +522,7 @@ def test_forwards_attachment_without_local_file():
     """path=None uses the no-path annotation form (metadata only)."""
     sent, _ = _run_forwarder([_attachment_msg(attachments=[_attachment(path=None)])])
     assert len(sent) == 1
-    assert sent[0].root.params["content"] == (
+    assert sent[0].message.root.params["content"] == (
         "[attachment: photo.png (image/png, 245 KB) — file not available locally]"
     )
 
@@ -544,7 +544,7 @@ def test_prefix_applies_to_caption_of_attachment_message():
         prefix="cc",
     )
     assert len(sent) == 1
-    assert sent[0].root.params["content"] == (
+    assert sent[0].message.root.params["content"] == (
         "check this out\n[attachment: /tmp/attachments/abc123.png (image/png, 245 KB)]"
     )
 

@@ -268,11 +268,16 @@ def _prompt_from_file(path: Path) -> Prompt:
     if not body:
         raise PromptFileError("prompt body is empty")
     arguments = _build_arguments(raw_arguments)
+    # title and context_kwarg declare their defaults positionally
+    # (Field(None, ...)), which mypy's pydantic plugin does not register as
+    # defaults — pass them explicitly to keep the call checkable.
     return Prompt(
         name=fields.get("name", path.stem),
+        title=None,
         description=fields.get("description"),
         arguments=arguments,
         fn=_make_render_fn(body, [argument.name for argument in arguments]),
+        context_kwarg=None,
     )
 
 
