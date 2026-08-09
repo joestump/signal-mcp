@@ -5,7 +5,7 @@ import type * as Preset from '@docusaurus/preset-classic';
 const config: Config = {
   title: 'Signal MCP',
   tagline: 'Send and receive Signal messages from any AI agent',
-  favicon: 'img/favicon.ico',
+  favicon: 'img/signal-logo.svg',
 
   future: {
     v4: true,
@@ -46,6 +46,13 @@ const config: Config = {
     },
     navbar: {
       title: 'Signal MCP',
+      logo: {
+        alt: 'Signal MCP',
+        src: 'img/signal-logo.svg',
+        srcDark: 'img/signal-logo-white.svg',
+        width: 30,
+        height: 30,
+      },
       items: [
         {
           type: 'docSidebar',
@@ -54,9 +61,15 @@ const config: Config = {
           label: 'Docs',
         },
         {
+          to: '/design-system',
+          label: 'Design',
+          position: 'left',
+        },
+        {
           href: 'https://github.com/joestump/signal-mcp',
-          label: 'GitHub',
           position: 'right',
+          className: 'header-github-link',
+          'aria-label': 'GitHub repository',
         },
       ],
     },
@@ -73,6 +86,10 @@ const config: Config = {
             {
               label: 'Claude Channel',
               to: '/docs/channel-mode',
+            },
+            {
+              label: 'Design System',
+              to: '/design-system',
             },
           ],
         },

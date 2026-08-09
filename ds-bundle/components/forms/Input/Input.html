@@ -1,0 +1,30 @@
+<!-- @dsCard group="Forms" name="Input" subtitle="Labeled field, rounded composer, focus ring" -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Input — Signal Design System</title>
+<link rel="stylesheet" href="../../../styles.css" />
+<style>
+  body { margin: 0; }
+  .stage { padding: 40px; display: flex; flex-direction: column; gap: 28px; max-width: 420px; }
+</style>
+</head>
+<body class="sig-root">
+  <div class="stage">
+    <div class="sig-field">
+      <label class="sig-field__label" for="phone">Phone number</label>
+      <input class="sig-input" id="phone" type="tel" placeholder="+1 555 010 1234" />
+    </div>
+    <div class="sig-field">
+      <label class="sig-field__label" for="msg">Message</label>
+      <input class="sig-input" id="msg" type="text" placeholder="Say hello…" />
+    </div>
+    <div class="sig-composer">
+      <input type="text" placeholder="Signal message" aria-label="Signal message" />
+      <button class="sig-btn sig-btn--primary sig-btn--icon" aria-label="Send">↑</button>
+    </div>
+  </div>
+</body>
+</html>

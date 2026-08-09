@@ -1,0 +1,54 @@
+<!-- @dsCard group="Foundations" name="Color" subtitle="Brand, chat, neutrals, semantic — with tokens" -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Color — Signal Design System</title>
+<link rel="stylesheet" href="../styles.css" />
+<style>
+  body { margin: 0; }
+  .stage { padding: 40px; }
+  .grp { font: 700 12px/1 var(--sig-font-sans); letter-spacing: 0.06em; text-transform: uppercase; color: var(--sig-gray-400); margin: 24px 0 12px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 12px; }
+  .sw { border: 1px solid var(--sig-border); border-radius: 14px; overflow: hidden; }
+  .chip { height: 72px; display: flex; align-items: flex-end; padding: 8px 10px; font: 600 12px/1 var(--sig-font-sans); }
+  .meta { padding: 8px 10px 10px; }
+  .meta b { display: block; font: 600 14px/1.3 var(--sig-font-sans); color: var(--sig-text-strong); }
+  .meta code { font: 400 11px/1.4 var(--sig-font-mono); color: var(--sig-gray-500); }
+</style>
+</head>
+<body class="sig-root">
+  <div class="stage">
+    <div class="grp">Brand</div>
+    <div class="grid">
+      <div class="sw"><div class="chip" style="background:#3b45fd;color:#fff">#3b45fd</div><div class="meta"><b>Ultramarine</b><code>--sig-ultramarine</code></div></div>
+      <div class="sw"><div class="chip" style="background:#2b34d6;color:#fff">#2b34d6</div><div class="meta"><b>Ultramarine Hover</b><code>--sig-ultramarine-hover</code></div></div>
+      <div class="sw"><div class="chip" style="background:#e3e8fe;color:#17171b">#e3e8fe</div><div class="meta"><b>Wash</b><code>--sig-wash</code></div></div>
+      <div class="sw"><div class="chip" style="background:#7c96f5;color:#17171b">#7c96f5</div><div class="meta"><b>Periwinkle</b><code>--sig-periwinkle</code></div></div>
+    </div>
+
+    <div class="grp">Chat</div>
+    <div class="grid">
+      <div class="sw"><div class="chip" style="background:#2f6bed;color:#fff">#2f6bed</div><div class="meta"><b>Chat Blue (sent)</b><code>--sig-bubble-sent</code></div></div>
+      <div class="sw"><div class="chip" style="background:#f0f1f5;color:#17171b">#f0f1f5</div><div class="meta"><b>Received (light)</b><code>--sig-bubble-received</code></div></div>
+      <div class="sw"><div class="chip" style="background:#cabcf6;color:#17171b">#cabcf6</div><div class="meta"><b>Note Lavender</b><code>--sig-note-lavender</code></div></div>
+    </div>
+
+    <div class="grp">Neutrals</div>
+    <div class="grid">
+      <div class="sw"><div class="chip" style="background:#17171b;color:#fff">#17171b</div><div class="meta"><b>Ink</b><code>--sig-ink</code></div></div>
+      <div class="sw"><div class="chip" style="background:#6b6b73;color:#fff">#6b6b73</div><div class="meta"><b>Gray 500</b><code>--sig-gray-500</code></div></div>
+      <div class="sw"><div class="chip" style="background:#f2f2f5;color:#17171b">#f2f2f5</div><div class="meta"><b>Gray 100</b><code>--sig-gray-100</code></div></div>
+      <div class="sw"><div class="chip" style="background:#fff;color:#17171b;box-shadow:inset 0 0 0 1px #e4e4ea">#ffffff</div><div class="meta"><b>White</b><code>--sig-white</code></div></div>
+    </div>
+
+    <div class="grp">Semantic</div>
+    <div class="grid">
+      <div class="sw"><div class="chip" style="background:#2c9c5a;color:#fff">#2c9c5a</div><div class="meta"><b>Success</b><code>--sig-success</code></div></div>
+      <div class="sw"><div class="chip" style="background:#e6a817;color:#17171b">#e6a817</div><div class="meta"><b>Warning</b><code>--sig-warning</code></div></div>
+      <div class="sw"><div class="chip" style="background:#f5432c;color:#fff">#f5432c</div><div class="meta"><b>Danger</b><code>--sig-danger</code></div></div>
+    </div>
+  </div>
+</body>
+</html>

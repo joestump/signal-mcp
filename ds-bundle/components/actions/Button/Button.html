@@ -1,0 +1,47 @@
+<!-- @dsCard group="Actions" name="Button" subtitle="Primary / secondary / outline / ghost / danger · 3 sizes" -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Button — Signal Design System</title>
+<link rel="stylesheet" href="../../../styles.css" />
+<style>
+  body { margin: 0; }
+  .stage { padding: 40px; display: flex; flex-direction: column; gap: 28px; }
+  .stage-row { display: flex; flex-wrap: wrap; align-items: center; gap: 16px; }
+  .stage-brand { background: linear-gradient(160deg, var(--sig-wash), #eef1ff); padding: 24px; border-radius: 20px; }
+  .stage-label { font: 600 12px/1 var(--sig-font-sans); letter-spacing: 0.06em; text-transform: uppercase; color: var(--sig-gray-400); }
+</style>
+</head>
+<body class="sig-root">
+  <div class="stage">
+    <span class="stage-label">Variants</span>
+    <div class="stage-row">
+      <button class="sig-btn sig-btn--primary">Get Started</button>
+      <button class="sig-btn sig-btn--outline">Learn more</button>
+      <button class="sig-btn sig-btn--ghost">Skip</button>
+      <button class="sig-btn sig-btn--danger">End call</button>
+    </div>
+
+    <span class="stage-label">Secondary on a brand fill (“Get Signal” style)</span>
+    <div class="stage-brand stage-row">
+      <button class="sig-btn sig-btn--secondary">Get Signal</button>
+      <button class="sig-btn sig-btn--outline">Docs</button>
+    </div>
+
+    <span class="stage-label">Sizes</span>
+    <div class="stage-row">
+      <button class="sig-btn sig-btn--primary sig-btn--sm">Small</button>
+      <button class="sig-btn sig-btn--primary">Default</button>
+      <button class="sig-btn sig-btn--primary sig-btn--lg">Large</button>
+    </div>
+
+    <span class="stage-label">Icon button</span>
+    <div class="stage-row">
+      <button class="sig-btn sig-btn--primary sig-btn--icon" aria-label="Send">↑</button>
+      <button class="sig-btn sig-btn--danger sig-btn--icon" aria-label="End call">✕</button>
+    </div>
+  </div>
+</body>
+</html>

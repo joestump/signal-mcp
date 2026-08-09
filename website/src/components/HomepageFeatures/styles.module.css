@@ -1,11 +1,82 @@
 .features {
-  display: flex;
-  align-items: center;
-  padding: 2rem 0;
-  width: 100%;
+  padding: 5rem 0 5.5rem;
 }
 
-.featureSvg {
-  height: 200px;
-  width: 200px;
+.sectionHead {
+  text-align: center;
+  max-width: 40rem;
+  margin: 0 auto 3rem;
+}
+
+.sectionEyebrow {
+  display: inline-block;
+  font-size: 0.8rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--sig-ultramarine);
+  margin-bottom: 0.75rem;
+}
+[data-theme='dark'] .sectionEyebrow {
+  color: var(--ifm-color-primary-light);
+}
+
+.sectionTitle {
+  font-size: clamp(1.7rem, 3.5vw, 2.4rem);
+  font-weight: 800;
+  letter-spacing: -0.025em;
+  margin: 0;
+}
+
+.featureRow {
+  row-gap: 1.5rem;
+}
+
+.featureCard {
+  height: 100%;
+  padding: 2rem 1.75rem;
+  background: var(--sig-white);
+  border: 1px solid var(--sig-gray-200);
+  border-radius: var(--sig-radius-lg);
+  box-shadow: var(--sig-shadow-sm);
+  transition: transform 180ms ease, box-shadow 220ms ease, border-color 220ms ease;
+}
+.featureCard:hover {
+  transform: translateY(-3px);
+  box-shadow: var(--sig-shadow-md);
+  border-color: var(--sig-wash-strong);
+}
+[data-theme='dark'] .featureCard {
+  background: #1f1f23;
+  border-color: #2c2c30;
+}
+[data-theme='dark'] .featureCard:hover {
+  border-color: var(--ifm-color-primary-darkest);
+}
+
+.featureIcon {
+  display: grid;
+  place-items: center;
+  width: 3.25rem;
+  height: 3.25rem;
+  font-size: 1.6rem;
+  border-radius: var(--sig-radius-md);
+  background: var(--sig-wash);
+  margin-bottom: 1.25rem;
+}
+
+.featureTitle {
+  font-size: 1.3rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  margin-bottom: 0.6rem;
+}
+
+.featureDesc {
+  color: var(--sig-gray-500);
+  line-height: 1.6;
+  margin: 0;
+}
+[data-theme='dark'] .featureDesc {
+  color: var(--sig-gray-300);
 }

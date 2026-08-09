@@ -1,0 +1,31 @@
+<!-- @dsCard group="Display" name="Badge" subtitle="Brand / wash / success / warning / danger / neutral" -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Badge — Signal Design System</title>
+<link rel="stylesheet" href="../../../styles.css" />
+<style>
+  body { margin: 0; }
+  .stage { padding: 40px; display: flex; flex-direction: column; gap: 20px; }
+  .stage-row { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
+</style>
+</head>
+<body class="sig-root">
+  <div class="stage">
+    <div class="stage-row">
+      <span class="sig-badge sig-badge--brand">Encrypted</span>
+      <span class="sig-badge sig-badge--wash">Note to Self</span>
+      <span class="sig-badge sig-badge--success">Delivered</span>
+      <span class="sig-badge sig-badge--warning">Pending</span>
+      <span class="sig-badge sig-badge--danger">Failed</span>
+      <span class="sig-badge sig-badge--neutral">Draft</span>
+    </div>
+    <div class="stage-row">
+      <span class="sig-badge sig-badge--success">✓ Read</span>
+      <span class="sig-badge sig-badge--brand">🔒 E2EE</span>
+    </div>
+  </div>
+</body>
+</html>

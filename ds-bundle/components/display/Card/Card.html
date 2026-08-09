@@ -1,0 +1,34 @@
+<!-- @dsCard group="Display" name="Card" subtitle="Feature card with icon chip, title, body" -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Card — Signal Design System</title>
+<link rel="stylesheet" href="../../../styles.css" />
+<style>
+  body { margin: 0; }
+  .stage { padding: 40px; display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 20px; background: var(--sig-gray-50); }
+  [data-theme='dark'] .stage { background: #17171b; }
+</style>
+</head>
+<body class="sig-root">
+  <div class="stage">
+    <div class="sig-card sig-card--hover">
+      <div class="sig-card__icon">🔒</div>
+      <h3 class="sig-card__title">Insecurity? Never.</h3>
+      <p class="sig-card__body">State-of-the-art end-to-end encryption powered by the open source Signal Protocol.</p>
+    </div>
+    <div class="sig-card sig-card--hover">
+      <div class="sig-card__icon">⚡</div>
+      <h3 class="sig-card__title">Fast JSON-RPC</h3>
+      <p class="sig-card__body">Persistent signal-cli daemon over TCP — no JVM cold start per request.</p>
+    </div>
+    <div class="sig-card sig-card--hover">
+      <div class="sig-card__icon">📱</div>
+      <h3 class="sig-card__title">Claude Channel</h3>
+      <p class="sig-card__body">Push incoming messages to your agent in real time. No polling required.</p>
+    </div>
+  </div>
+</body>
+</html>

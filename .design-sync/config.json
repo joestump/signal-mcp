@@ -1,0 +1,7 @@
+{
+  "projectId": "1ababc75-09a7-4aa0-8372-3fb5b1428407",
+  "projectName": "Signal Design System",
+  "shape": "custom",
+  "localDir": "ds-bundle",
+  "note": "Hand-authored, class-based (CSS) design system — not converter-generated. This repo is a Python MCP with no compiled JS component library, so the design-sync converter path does not apply. The layout ships styles.css + tokens + HTML preview cards (@dsCard) + .prompt.md docs + README conventions header. No _ds_bundle.js (no React runtime; the idiom is class-based). No _ds_sync.json anchor, so re-syncs re-verify/re-upload the whole bundle, which is correct for a hand-authored layout."
+}

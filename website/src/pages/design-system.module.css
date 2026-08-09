@@ -1,0 +1,351 @@
+/* Signal MCP — Design System reference page */
+
+.dsHero {
+  padding: 4rem 0 3rem;
+  background:
+    radial-gradient(100% 120% at 90% 0%, var(--sig-periwinkle) 0%, transparent 50%),
+    linear-gradient(160deg, var(--sig-wash) 0%, var(--sig-white) 70%);
+  border-bottom: 1px solid var(--sig-gray-200);
+}
+[data-theme='dark'] .dsHero {
+  background:
+    radial-gradient(100% 120% at 90% 0%, rgba(59, 69, 253, 0.4) 0%, transparent 50%),
+    linear-gradient(160deg, #1b1d2e 0%, #17171b 70%);
+  border-bottom-color: #2c2c30;
+}
+
+.eyebrow {
+  display: inline-block;
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--sig-ultramarine);
+  margin-bottom: 0.6rem;
+}
+[data-theme='dark'] .eyebrow {
+  color: var(--ifm-color-primary-light);
+}
+
+.dsTitle {
+  font-size: clamp(2.2rem, 5vw, 3.4rem);
+  font-weight: 800;
+  letter-spacing: -0.035em;
+  margin-bottom: 1rem;
+}
+
+.dsLead {
+  max-width: 40rem;
+  font-size: 1.15rem;
+  line-height: 1.6;
+  color: var(--sig-gray-500);
+}
+[data-theme='dark'] .dsLead {
+  color: var(--sig-gray-300);
+}
+
+.dsMain {
+  padding-top: 3rem;
+  padding-bottom: 5rem;
+}
+
+.section {
+  padding: 2.5rem 0;
+  border-top: 1px solid var(--sig-gray-200);
+}
+.section:first-child {
+  border-top: none;
+}
+[data-theme='dark'] .section {
+  border-top-color: #2c2c30;
+}
+
+.sectionTitle {
+  font-size: clamp(1.6rem, 3vw, 2.1rem);
+  font-weight: 800;
+  letter-spacing: -0.025em;
+  margin-bottom: 1.5rem;
+}
+
+.subhead {
+  font-size: 0.9rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--sig-gray-400);
+  margin: 2rem 0 1rem;
+}
+
+.para {
+  max-width: 42rem;
+  color: var(--sig-gray-500);
+  line-height: 1.6;
+  margin-bottom: 1.5rem;
+}
+[data-theme='dark'] .para {
+  color: var(--sig-gray-300);
+}
+
+/* --- Swatches ----------------------------------------------------------- */
+.swatchGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+  gap: 1rem;
+}
+.swatch {
+  border: 1px solid var(--sig-gray-200);
+  border-radius: var(--sig-radius-md);
+  overflow: hidden;
+  background: var(--sig-white);
+}
+[data-theme='dark'] .swatch {
+  background: #1f1f23;
+  border-color: #2c2c30;
+}
+.swatchChip {
+  display: flex;
+  align-items: flex-end;
+  height: 78px;
+  padding: 0.6rem 0.75rem;
+  font-size: 0.8rem;
+  font-weight: 600;
+  border-bottom: 1px solid transparent;
+}
+.swatchMeta {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  padding: 0.7rem 0.75rem 0.85rem;
+}
+.swatchMeta strong {
+  font-size: 0.95rem;
+}
+.swatchMeta code {
+  font-size: 0.72rem;
+  color: var(--sig-gray-500);
+  background: none;
+  border: none;
+  padding: 0;
+}
+.swatchNote {
+  font-size: 0.75rem;
+  color: var(--sig-gray-400);
+}
+
+/* --- Type --------------------------------------------------------------- */
+.typeStack {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+}
+.typeRow {
+  display: grid;
+  grid-template-columns: 130px 1fr;
+  gap: 1.5rem;
+  align-items: baseline;
+  padding-bottom: 1.25rem;
+  border-bottom: 1px dashed var(--sig-gray-200);
+}
+[data-theme='dark'] .typeRow {
+  border-bottom-color: #2c2c30;
+}
+.typeLabel {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  font-weight: 700;
+  color: var(--sig-gray-500);
+}
+.typeLabel code {
+  font-size: 0.7rem;
+  font-weight: 500;
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--sig-gray-400);
+}
+.typeSample {
+  line-height: 1.1;
+  letter-spacing: -0.02em;
+  color: var(--ifm-heading-color);
+}
+
+/* --- Radii -------------------------------------------------------------- */
+.radiiGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+  gap: 1rem;
+}
+.radiiItem {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.4rem;
+  text-align: center;
+}
+.radiiBox {
+  width: 100%;
+  height: 72px;
+  background: linear-gradient(160deg, var(--sig-periwinkle), var(--sig-ultramarine));
+}
+.radiiItem code {
+  font-size: 0.72rem;
+  color: var(--sig-gray-500);
+  background: none;
+  border: none;
+  padding: 0;
+}
+
+/* --- Spacing ------------------------------------------------------------ */
+.spaceStack {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+.spaceRow {
+  display: grid;
+  grid-template-columns: 90px 1fr auto;
+  gap: 1rem;
+  align-items: center;
+}
+.spaceLabel {
+  font-size: 0.78rem;
+  color: var(--sig-gray-500);
+  background: none;
+  border: none;
+  padding: 0;
+}
+.spaceBar {
+  height: 16px;
+  background: var(--sig-ultramarine);
+  border-radius: var(--sig-radius-xs);
+}
+.spacePx {
+  font-size: 0.78rem;
+  color: var(--sig-gray-400);
+  justify-self: start;
+}
+
+/* --- Components: shared row --------------------------------------------- */
+.componentRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.9rem;
+  margin-bottom: 1.25rem;
+}
+
+/* --- Badges ------------------------------------------------------------- */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.32rem 0.85rem;
+  font-size: 0.82rem;
+  font-weight: 700;
+  border-radius: var(--sig-radius-pill);
+  letter-spacing: -0.01em;
+}
+.badgeBrand {
+  background: var(--sig-ultramarine);
+  color: #fff;
+}
+.badgeWash {
+  background: var(--sig-wash);
+  color: var(--sig-ultramarine-hover);
+}
+.badgeSuccess {
+  background: rgba(44, 156, 90, 0.14);
+  color: var(--sig-success);
+}
+.badgeDanger {
+  background: rgba(245, 67, 44, 0.14);
+  color: var(--sig-danger);
+}
+.badgeNeutral {
+  background: var(--sig-gray-100);
+  color: var(--sig-gray-500);
+}
+[data-theme='dark'] .badgeNeutral {
+  background: #2c2c30;
+  color: var(--sig-gray-300);
+}
+
+/* --- Cards -------------------------------------------------------------- */
+.cardDemoGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 1.25rem;
+}
+.demoCard {
+  padding: 1.75rem;
+  background: var(--sig-white);
+  border: 1px solid var(--sig-gray-200);
+  border-radius: var(--sig-radius-lg);
+  box-shadow: var(--sig-shadow-sm);
+}
+[data-theme='dark'] .demoCard {
+  background: #1f1f23;
+  border-color: #2c2c30;
+}
+.demoCard strong {
+  display: block;
+  font-size: 1.15rem;
+  margin-bottom: 0.4rem;
+}
+.demoCard p {
+  color: var(--sig-gray-500);
+  margin: 0;
+  line-height: 1.55;
+}
+[data-theme='dark'] .demoCard p {
+  color: var(--sig-gray-300);
+}
+.demoCardIcon {
+  display: grid;
+  place-items: center;
+  width: 3rem;
+  height: 3rem;
+  font-size: 1.5rem;
+  border-radius: var(--sig-radius-md);
+  background: var(--sig-wash);
+  margin-bottom: 1rem;
+}
+
+/* --- Bubbles ------------------------------------------------------------ */
+.bubbleDemo {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  max-width: 26rem;
+  padding: 1.5rem;
+  background: var(--sig-gray-50);
+  border-radius: var(--sig-radius-lg);
+  border: 1px solid var(--sig-gray-200);
+}
+[data-theme='dark'] .bubbleDemo {
+  background: #17171b;
+  border-color: #2c2c30;
+}
+.bubble {
+  max-width: 82%;
+  padding: 0.6rem 0.9rem;
+  font-size: 0.95rem;
+  line-height: 1.35;
+  border-radius: var(--sig-radius-lg);
+}
+.bubbleIn {
+  align-self: flex-start;
+  background: var(--sig-bubble-received);
+  color: var(--sig-ink);
+  border-bottom-left-radius: var(--sig-radius-xs);
+}
+[data-theme='dark'] .bubbleIn {
+  background: var(--sig-bubble-received-dark);
+  color: #ededf2;
+}
+.bubbleOut {
+  align-self: flex-end;
+  background: var(--sig-bubble-sent);
+  color: #fff;
+  border-bottom-right-radius: var(--sig-radius-xs);
+}

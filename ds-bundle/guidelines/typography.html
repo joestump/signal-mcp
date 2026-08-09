@@ -1,0 +1,27 @@
+<!-- @dsCard group="Foundations" name="Typography" subtitle="Inter — display to small, tight heading tracking" -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Typography — Signal Design System</title>
+<link rel="stylesheet" href="../styles.css" />
+<style>
+  body { margin: 0; }
+  .stage { padding: 40px; display: flex; flex-direction: column; gap: 22px; }
+  .row { display: grid; grid-template-columns: 130px 1fr; gap: 24px; align-items: baseline; border-bottom: 1px dashed var(--sig-border); padding-bottom: 18px; }
+  .lbl { font: 700 13px/1.3 var(--sig-font-sans); color: var(--sig-gray-500); }
+  .lbl code { display:block; font: 400 11px/1.4 var(--sig-font-mono); color: var(--sig-gray-400); }
+</style>
+</head>
+<body class="sig-root">
+  <div class="stage">
+    <div class="row"><span class="lbl">Display<code>4rem / 800</code></span><span class="sig-display">Speak freely</span></div>
+    <div class="row"><span class="lbl">H1<code>2.75rem / 800</code></span><span class="sig-h1">Why Signal MCP?</span></div>
+    <div class="row"><span class="lbl">H2<code>1.9rem / 800</code></span><span class="sig-h2">End-to-end encrypted</span></div>
+    <div class="row"><span class="lbl">H3<code>1.35rem / 700</code></span><span class="sig-h3">Send &amp; receive</span></div>
+    <div class="row"><span class="lbl">Body<code>1.05rem / 400</code></span><span class="sig-body">Say "hello" to a different messaging experience.</span></div>
+    <div class="row"><span class="lbl">Small<code>0.85rem / 500</code></span><span class="sig-small">via Signal MCP</span></div>
+  </div>
+</body>
+</html>

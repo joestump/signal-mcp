@@ -1,4 +1,5 @@
 import type {ReactNode} from 'react';
+import clsx from 'clsx';
 import Heading from '@theme/Heading';
 import styles from './styles.module.css';
 
@@ -32,7 +33,7 @@ const FeatureList: FeatureItem[] = [
   },
   {
     title: 'Fast JSON-RPC',
-    emoji: '\u26A1',
+    emoji: '⚡',
     description: (
       <>
         Talks to a persistent signal-cli daemon over TCP. No JVM cold start per
@@ -45,12 +46,14 @@ const FeatureList: FeatureItem[] = [
 function Feature({title, emoji, description}: FeatureItem) {
   return (
     <div className="col col--4">
-      <div className="text--center" style={{fontSize: '3rem', marginBottom: '1rem'}}>
-        {emoji}
-      </div>
-      <div className="text--center padding-horiz--md">
-        <Heading as="h3">{title}</Heading>
-        <p>{description}</p>
+      <div className={styles.featureCard}>
+        <div className={styles.featureIcon} aria-hidden="true">
+          {emoji}
+        </div>
+        <Heading as="h3" className={styles.featureTitle}>
+          {title}
+        </Heading>
+        <p className={styles.featureDesc}>{description}</p>
       </div>
     </div>
   );
@@ -60,7 +63,13 @@ export default function HomepageFeatures(): ReactNode {
   return (
     <section className={styles.features}>
       <div className="container">
-        <div className="row">
+        <div className={styles.sectionHead}>
+          <span className={styles.sectionEyebrow}>Why Signal MCP?</span>
+          <Heading as="h2" className={styles.sectionTitle}>
+            A private, powerful bridge between agents and people
+          </Heading>
+        </div>
+        <div className={clsx('row', styles.featureRow)}>
           {FeatureList.map((props, idx) => (
             <Feature key={idx} {...props} />
           ))}

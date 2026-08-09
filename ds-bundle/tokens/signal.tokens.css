@@ -1,0 +1,104 @@
+/**
+ * Signal Design Tokens
+ * The single source of truth for the Signal design language.
+ * Grounded in Signal's official brand kit.
+ *
+ * Consumed by every rendered design via styles.css's @import closure.
+ * Reference tokens with var(--sig-*). Dark mode: set data-theme="dark"
+ * on <html> or any ancestor.
+ */
+:root {
+  /* Brand */
+  --sig-ultramarine: #3b45fd;         /* primary brand */
+  --sig-ultramarine-hover: #2b34d6;   /* hover / pressed */
+  --sig-ultramarine-active: #212ab0;  /* deep pressed */
+  --sig-wash: #e3e8fe;                /* soft brand tint surface */
+  --sig-wash-strong: #c9d2fb;         /* wash border / hover */
+  --sig-periwinkle: #7c96f5;          /* decorative brand tint */
+  --sig-periwinkle-soft: #a9bbf8;
+
+  /* Chat (in-app) */
+  --sig-bubble-sent: #2f6bed;         /* outgoing message blue */
+  --sig-bubble-received: #f0f1f5;     /* incoming bubble (light) */
+  --sig-bubble-received-dark: #2c2c30;/* incoming bubble (dark)  */
+  --sig-note-lavender: #cabcf6;       /* Note to Self accent */
+
+  /* Neutrals */
+  --sig-ink: #17171b;
+  --sig-gray-900: #1f1f23;
+  --sig-gray-800: #2c2c30;
+  --sig-gray-700: #3a3a40;
+  --sig-gray-500: #6b6b73;
+  --sig-gray-400: #8b8b93;
+  --sig-gray-300: #c9c9d1;
+  --sig-gray-200: #e4e4ea;
+  --sig-gray-100: #f2f2f5;
+  --sig-gray-50: #f8f8fb;
+  --sig-white: #ffffff;
+
+  /* Semantic */
+  --sig-success: #2c9c5a;
+  --sig-warning: #e6a817;
+  --sig-danger: #f5432c;              /* Signal end-call red */
+
+  /* Surfaces / text (theme-aware) */
+  --sig-bg: var(--sig-white);
+  --sig-surface: var(--sig-gray-50);
+  --sig-border: var(--sig-gray-200);
+  --sig-text: #2b2b31;
+  --sig-text-strong: var(--sig-ink);
+  --sig-text-muted: var(--sig-gray-500);
+
+  /* Radii */
+  --sig-radius-xs: 6px;
+  --sig-radius-sm: 10px;
+  --sig-radius-md: 14px;
+  --sig-radius-lg: 20px;
+  --sig-radius-xl: 28px;
+  --sig-radius-pill: 999px;
+
+  /* Spacing (4px base) */
+  --sig-space-1: 4px;
+  --sig-space-2: 8px;
+  --sig-space-3: 12px;
+  --sig-space-4: 16px;
+  --sig-space-5: 24px;
+  --sig-space-6: 32px;
+  --sig-space-7: 48px;
+  --sig-space-8: 64px;
+
+  /* Shadows */
+  --sig-shadow-sm: 0 1px 2px rgba(23, 23, 27, 0.06), 0 1px 3px rgba(23, 23, 27, 0.08);
+  --sig-shadow-md: 0 4px 12px rgba(23, 23, 27, 0.08), 0 2px 4px rgba(23, 23, 27, 0.06);
+  --sig-shadow-lg: 0 12px 32px rgba(23, 23, 27, 0.12), 0 4px 8px rgba(23, 23, 27, 0.06);
+  --sig-shadow-brand: 0 8px 24px rgba(59, 69, 253, 0.28);
+
+  /* Type */
+  --sig-font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI',
+    Roboto, Helvetica, Arial, sans-serif;
+  --sig-font-mono: 'SF Mono', ui-monospace, SFMono-Regular, 'Roboto Mono',
+    Menlo, Consolas, monospace;
+  --sig-weight-regular: 400;
+  --sig-weight-medium: 500;
+  --sig-weight-semibold: 600;
+  --sig-weight-bold: 700;
+  --sig-weight-heavy: 800;
+}
+
+/* Dark mode — lighter, higher-contrast blues on near-black surfaces */
+[data-theme='dark'] {
+  --sig-wash: #20233a;
+  --sig-wash-strong: #2a2f4d;
+  --sig-bubble-received: #2c2c30;
+
+  --sig-bg: #17171b;
+  --sig-surface: #1f1f23;
+  --sig-border: #2c2c30;
+  --sig-text: #d8d8de;
+  --sig-text-strong: #f5f5f7;
+  --sig-text-muted: #8b8b93;
+
+  --sig-ultramarine: #8b93ff;         /* link/accent blue on dark */
+  --sig-ultramarine-hover: #a7adff;
+  --sig-shadow-brand: 0 8px 24px rgba(59, 69, 253, 0.45);
+}

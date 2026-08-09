@@ -1,0 +1,243 @@
+/**
+ * Signal Design System — styles.css
+ * ---------------------------------------------------------------------------
+ * The complete look of the Signal design language, in one @import closure.
+ * Every rendered design receives this file (and what it @imports). Style with
+ * the `.sig-*` component classes below and reference raw tokens with var(--sig-*).
+ *
+ * Idiom: CLASS-BASED. There is no JavaScript component runtime — compose plain
+ * HTML/JSX and apply these classes. New class names are NOT part of the system;
+ * use the vocabulary defined here.
+ */
+
+@import './tokens/signal.tokens.css';
+
+/* ==========================================================================
+   Base
+   ========================================================================== */
+.sig-root,
+body.sig-root {
+  font-family: var(--sig-font-sans);
+  color: var(--sig-text);
+  background: var(--sig-bg);
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+  font-feature-settings: 'cv11', 'ss01';
+}
+
+/* Type helpers */
+.sig-display { font-size: clamp(2.6rem, 6vw, 4rem); font-weight: 800; letter-spacing: -0.035em; line-height: 1.02; color: var(--sig-text-strong); }
+.sig-h1 { font-size: clamp(2rem, 4vw, 2.75rem); font-weight: 800; letter-spacing: -0.03em; line-height: 1.08; color: var(--sig-text-strong); }
+.sig-h2 { font-size: 1.9rem; font-weight: 800; letter-spacing: -0.025em; color: var(--sig-text-strong); }
+.sig-h3 { font-size: 1.35rem; font-weight: 700; letter-spacing: -0.02em; color: var(--sig-text-strong); }
+.sig-body { font-size: 1.05rem; font-weight: 400; color: var(--sig-text); }
+.sig-small { font-size: 0.85rem; font-weight: 500; color: var(--sig-text-muted); }
+.sig-eyebrow {
+  display: inline-block;
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--sig-ultramarine);
+}
+.sig-code {
+  font-family: var(--sig-font-mono);
+  font-size: 0.9em;
+  background: var(--sig-wash);
+  color: var(--sig-ultramarine-hover);
+  padding: 0.1em 0.4em;
+  border-radius: var(--sig-radius-xs);
+  border: 1px solid var(--sig-wash-strong);
+}
+
+/* Layout helpers */
+.sig-stack { display: flex; flex-direction: column; gap: var(--sig-space-4); }
+.sig-row { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sig-space-3); }
+
+/* ==========================================================================
+   Button — Signal pills
+   ========================================================================== */
+.sig-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sig-space-2);
+  font-family: var(--sig-font-sans);
+  font-weight: 700;
+  font-size: 1rem;
+  letter-spacing: -0.01em;
+  line-height: 1;
+  padding: 0.75rem 1.5rem;
+  border: none;
+  border-radius: var(--sig-radius-pill);
+  cursor: pointer;
+  text-decoration: none;
+  transition: transform 120ms ease, box-shadow 160ms ease, background-color 160ms ease;
+}
+.sig-btn:focus-visible { outline: 3px solid var(--sig-wash-strong); outline-offset: 2px; }
+.sig-btn--sm { padding: 0.5rem 1.1rem; font-size: 0.9rem; }
+.sig-btn--lg { padding: 0.95rem 2rem; font-size: 1.05rem; }
+
+.sig-btn--primary { background: var(--sig-ultramarine); color: #fff; box-shadow: var(--sig-shadow-brand); }
+.sig-btn--primary:hover { background: var(--sig-ultramarine-hover); transform: translateY(-1px); }
+.sig-btn--primary:active { background: var(--sig-ultramarine-active); transform: translateY(0); }
+
+/* "Get Signal" style — white on a brand fill */
+.sig-btn--secondary { background: #fff; color: var(--sig-ultramarine); box-shadow: var(--sig-shadow-md); }
+.sig-btn--secondary:hover { background: var(--sig-gray-50); transform: translateY(-1px); }
+
+.sig-btn--outline { background: transparent; color: var(--sig-ultramarine); box-shadow: inset 0 0 0 2px var(--sig-wash-strong); }
+.sig-btn--outline:hover { background: var(--sig-wash); }
+
+.sig-btn--ghost { background: transparent; color: var(--sig-ultramarine); box-shadow: none; }
+.sig-btn--ghost:hover { background: var(--sig-wash); }
+
+.sig-btn--danger { background: var(--sig-danger); color: #fff; }
+.sig-btn--danger:hover { filter: brightness(0.94); }
+
+/* Round icon button (e.g. call, send) */
+.sig-btn--icon {
+  width: 2.75rem; height: 2.75rem; padding: 0; border-radius: var(--sig-radius-pill);
+}
+
+/* ==========================================================================
+   Badge / Chip
+   ========================================================================== */
+.sig-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sig-space-1);
+  padding: 0.32rem 0.85rem;
+  font-size: 0.82rem;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  border-radius: var(--sig-radius-pill);
+  line-height: 1;
+}
+.sig-badge--brand { background: var(--sig-ultramarine); color: #fff; }
+.sig-badge--wash { background: var(--sig-wash); color: var(--sig-ultramarine-hover); }
+.sig-badge--success { background: rgba(44, 156, 90, 0.14); color: var(--sig-success); }
+.sig-badge--warning { background: rgba(230, 168, 23, 0.16); color: #a4780a; }
+.sig-badge--danger { background: rgba(245, 67, 44, 0.14); color: var(--sig-danger); }
+.sig-badge--neutral { background: var(--sig-gray-100); color: var(--sig-gray-500); }
+[data-theme='dark'] .sig-badge--neutral { background: var(--sig-gray-800); color: var(--sig-gray-300); }
+
+/* ==========================================================================
+   Card
+   ========================================================================== */
+.sig-card {
+  padding: var(--sig-space-6);
+  background: var(--sig-bg);
+  border: 1px solid var(--sig-border);
+  border-radius: var(--sig-radius-lg);
+  box-shadow: var(--sig-shadow-sm);
+  transition: transform 180ms ease, box-shadow 220ms ease, border-color 220ms ease;
+}
+[data-theme='dark'] .sig-card { background: var(--sig-surface); }
+.sig-card--hover:hover { transform: translateY(-3px); box-shadow: var(--sig-shadow-md); border-color: var(--sig-wash-strong); }
+.sig-card__icon {
+  display: grid; place-items: center;
+  width: 3.25rem; height: 3.25rem;
+  font-size: 1.6rem;
+  border-radius: var(--sig-radius-md);
+  background: var(--sig-wash);
+  margin-bottom: var(--sig-space-4);
+}
+.sig-card__title { font-size: 1.3rem; font-weight: 700; letter-spacing: -0.02em; margin: 0 0 var(--sig-space-2); color: var(--sig-text-strong); }
+.sig-card__body { color: var(--sig-text-muted); margin: 0; line-height: 1.6; }
+
+/* ==========================================================================
+   Avatar
+   ========================================================================== */
+.sig-avatar {
+  display: grid; place-items: center;
+  width: 2.75rem; height: 2.75rem;
+  border-radius: var(--sig-radius-pill);
+  background: var(--sig-wash);
+  font-size: 1.3rem;
+  overflow: hidden;
+  color: var(--sig-ultramarine-hover);
+  font-weight: 700;
+}
+.sig-avatar img { width: 100%; height: 100%; object-fit: cover; }
+.sig-avatar--sm { width: 2rem; height: 2rem; font-size: 1rem; }
+.sig-avatar--lg { width: 3.5rem; height: 3.5rem; font-size: 1.6rem; }
+.sig-avatar--note { background: var(--sig-note-lavender); color: var(--sig-ultramarine-active); }
+
+/* ==========================================================================
+   Field / Input
+   ========================================================================== */
+.sig-field { display: flex; flex-direction: column; gap: var(--sig-space-2); }
+.sig-field__label { font-size: 0.85rem; font-weight: 600; color: var(--sig-text-strong); }
+.sig-input {
+  font-family: var(--sig-font-sans);
+  font-size: 1rem;
+  color: var(--sig-text);
+  background: var(--sig-surface);
+  border: 1px solid var(--sig-border);
+  border-radius: var(--sig-radius-md);
+  padding: 0.7rem 1rem;
+  transition: border-color 150ms ease, box-shadow 150ms ease;
+}
+.sig-input::placeholder { color: var(--sig-gray-400); }
+.sig-input:focus { outline: none; border-color: var(--sig-ultramarine); box-shadow: 0 0 0 3px var(--sig-wash); }
+
+/* Rounded "Signal message" composer */
+.sig-composer {
+  display: flex; align-items: center; gap: var(--sig-space-3);
+  background: var(--sig-surface);
+  border: 1px solid var(--sig-border);
+  border-radius: var(--sig-radius-pill);
+  padding: 0.4rem 0.5rem 0.4rem 1.1rem;
+}
+.sig-composer input {
+  flex: 1; border: none; background: transparent; outline: none;
+  font-family: var(--sig-font-sans); font-size: 1rem; color: var(--sig-text);
+}
+
+/* ==========================================================================
+   Chat — the signature Signal element
+   ========================================================================== */
+.sig-thread {
+  display: flex; flex-direction: column; gap: var(--sig-space-2);
+  padding: var(--sig-space-5);
+  background: var(--sig-surface);
+  border: 1px solid var(--sig-border);
+  border-radius: var(--sig-radius-lg);
+}
+[data-theme='dark'] .sig-thread { background: #17171b; }
+.sig-bubble {
+  max-width: 82%;
+  padding: 0.6rem 0.9rem;
+  font-size: 0.95rem;
+  line-height: 1.35;
+  border-radius: var(--sig-radius-lg);
+  word-wrap: break-word;
+}
+.sig-bubble--received {
+  align-self: flex-start;
+  background: var(--sig-bubble-received);
+  color: var(--sig-ink);
+  border-bottom-left-radius: var(--sig-radius-xs);
+}
+[data-theme='dark'] .sig-bubble--received { color: #ededf2; }
+.sig-bubble--sent {
+  align-self: flex-end;
+  background: var(--sig-bubble-sent);
+  color: #fff;
+  border-bottom-right-radius: var(--sig-radius-xs);
+}
+.sig-bubble__meta { display: block; font-size: 0.72rem; opacity: 0.7; margin-top: 0.2rem; }
+
+/* ==========================================================================
+   Alert / Notice
+   ========================================================================== */
+.sig-alert {
+  padding: var(--sig-space-4) var(--sig-space-5);
+  border-radius: var(--sig-radius-md);
+  border-left: 4px solid var(--sig-ultramarine);
+  background: var(--sig-wash);
+  color: var(--sig-text-strong);
+}
+.sig-alert--danger { border-left-color: var(--sig-danger); background: rgba(245, 67, 44, 0.1); }
+.sig-alert--success { border-left-color: var(--sig-success); background: rgba(44, 156, 90, 0.1); }

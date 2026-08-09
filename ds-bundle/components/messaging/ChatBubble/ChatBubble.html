@@ -1,0 +1,38 @@
+<!-- @dsCard group="Messaging" name="ChatBubble" subtitle="Sent / received bubbles in a thread, with composer" -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>ChatBubble — Signal Design System</title>
+<link rel="stylesheet" href="../../../styles.css" />
+<style>
+  body { margin: 0; }
+  .stage { padding: 40px; display: flex; justify-content: center; }
+  .phone { width: 100%; max-width: 380px; display: flex; flex-direction: column; gap: 14px; }
+</style>
+</head>
+<body class="sig-root">
+  <div class="stage">
+    <div class="phone">
+      <div class="sig-thread">
+        <div class="sig-bubble sig-bubble--received">
+          Ping me on Signal when the deploy finishes.
+        </div>
+        <div class="sig-bubble sig-bubble--sent">
+          Deploy to prod succeeded ✅
+          <span class="sig-bubble__meta">4m12s · Delivered</span>
+        </div>
+        <div class="sig-bubble sig-bubble--sent">
+          All 218 tests green. Want the changelog?
+        </div>
+        <div class="sig-bubble sig-bubble--received">👍</div>
+      </div>
+      <div class="sig-composer">
+        <input type="text" placeholder="Signal message" aria-label="Signal message" />
+        <button class="sig-btn sig-btn--primary sig-btn--icon" aria-label="Send">↑</button>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

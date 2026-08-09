@@ -1,30 +1,357 @@
 /**
- * Any CSS included here will be global. The classic template
- * bundles Infima by default. Infima is a CSS framework designed to
- * work well for content-centric websites.
+ * Signal MCP — Design System
+ * ---------------------------------------------------------------------------
+ * A Signal-inspired design language layered over Infima (Docusaurus).
+ * Grounded in Signal's official brand kit:
+ *   Ultramarine #3b45fd · Wash #e3e8fe · near-black surfaces · Inter · pills.
+ *
+ * The `--sig-*` custom properties are the single source of truth for the
+ * design language. Infima's `--ifm-*` variables are mapped onto them so the
+ * whole site inherits the Signal look. The same token set is mirrored in the
+ * claude.ai/design layout (ds-bundle/styles.css).
  */
 
-/* You can override the default Infima variables here. */
+/* Inter — Signal's typeface. Loaded from Google Fonts. */
+@import url('https://fonts.googleapis.com/css2?family=Inter:ital,opsz,wght@0,14..32,400;0,14..32,500;0,14..32,600;0,14..32,700;0,14..32,800;1,14..32,400&display=swap');
+
+/* ==========================================================================
+   1. Signal design tokens
+   ========================================================================== */
 :root {
-  --ifm-color-primary: #2e8555;
-  --ifm-color-primary-dark: #29784c;
-  --ifm-color-primary-darker: #277148;
-  --ifm-color-primary-darkest: #205d3b;
-  --ifm-color-primary-light: #33925d;
-  --ifm-color-primary-lighter: #359962;
-  --ifm-color-primary-lightest: #3cad6e;
-  --ifm-code-font-size: 95%;
-  --docusaurus-highlighted-code-line-bg: rgba(0, 0, 0, 0.1);
+  /* --- Brand ------------------------------------------------------------ */
+  --sig-ultramarine: #3b45fd;        /* primary brand — logo, CTAs, accents  */
+  --sig-ultramarine-hover: #2b34d6;  /* pressed / hover                       */
+  --sig-ultramarine-active: #212ab0; /* deep pressed                          */
+  --sig-wash: #e3e8fe;               /* soft brand tint surface               */
+  --sig-wash-strong: #c9d2fb;        /* stronger wash for borders/hovers      */
+  --sig-periwinkle: #7c96f5;         /* decorative brand tint (hero)          */
+  --sig-periwinkle-soft: #a9bbf8;    /* lighter decorative tint               */
+
+  /* --- Chat (in-app) ---------------------------------------------------- */
+  --sig-bubble-sent: #2f6bed;        /* outgoing message blue                 */
+  --sig-bubble-received: #f0f1f5;    /* incoming bubble (light)               */
+  --sig-bubble-received-dark: #2c2c30;/* incoming bubble (dark)               */
+  --sig-note-lavender: #cabcf6;      /* Note to Self accent                   */
+
+  /* --- Neutrals --------------------------------------------------------- */
+  --sig-ink: #17171b;                /* primary text / darkest surface        */
+  --sig-gray-900: #1f1f23;
+  --sig-gray-800: #2c2c30;
+  --sig-gray-700: #3a3a40;
+  --sig-gray-500: #6b6b73;
+  --sig-gray-400: #8b8b93;
+  --sig-gray-300: #c9c9d1;
+  --sig-gray-200: #e4e4ea;
+  --sig-gray-100: #f2f2f5;
+  --sig-gray-50: #f8f8fb;
+  --sig-white: #ffffff;
+
+  /* --- Semantic --------------------------------------------------------- */
+  --sig-success: #2c9c5a;
+  --sig-warning: #e6a817;
+  --sig-danger: #f5432c;             /* Signal end-call red                   */
+
+  /* --- Radii ------------------------------------------------------------ */
+  --sig-radius-xs: 6px;
+  --sig-radius-sm: 10px;
+  --sig-radius-md: 14px;
+  --sig-radius-lg: 20px;
+  --sig-radius-xl: 28px;
+  --sig-radius-pill: 999px;
+
+  /* --- Spacing (4px base) ----------------------------------------------- */
+  --sig-space-1: 4px;
+  --sig-space-2: 8px;
+  --sig-space-3: 12px;
+  --sig-space-4: 16px;
+  --sig-space-5: 24px;
+  --sig-space-6: 32px;
+  --sig-space-7: 48px;
+  --sig-space-8: 64px;
+
+  /* --- Shadows ---------------------------------------------------------- */
+  --sig-shadow-sm: 0 1px 2px rgba(23, 23, 27, 0.06), 0 1px 3px rgba(23, 23, 27, 0.08);
+  --sig-shadow-md: 0 4px 12px rgba(23, 23, 27, 0.08), 0 2px 4px rgba(23, 23, 27, 0.06);
+  --sig-shadow-lg: 0 12px 32px rgba(23, 23, 27, 0.12), 0 4px 8px rgba(23, 23, 27, 0.06);
+  --sig-shadow-brand: 0 8px 24px rgba(59, 69, 253, 0.28);
+
+  /* --- Type ------------------------------------------------------------- */
+  --sig-font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI',
+    Roboto, Helvetica, Arial, sans-serif;
+  --sig-font-mono: 'SF Mono', ui-monospace, SFMono-Regular, 'Roboto Mono',
+    Menlo, Consolas, monospace;
+
+  /* ======================================================================
+     Infima mappings — LIGHT
+     ====================================================================== */
+  --ifm-color-primary: #3b45fd;
+  --ifm-color-primary-dark: #2530f9;
+  --ifm-color-primary-darker: #1b27f0;
+  --ifm-color-primary-darkest: #1620c4;
+  --ifm-color-primary-light: #545dfd;
+  --ifm-color-primary-lighter: #6970fe;
+  --ifm-color-primary-lightest: #9297fe;
+
+  --ifm-color-success: var(--sig-success);
+  --ifm-color-warning: var(--sig-warning);
+  --ifm-color-danger: var(--sig-danger);
+
+  --ifm-font-family-base: var(--sig-font-sans);
+  --ifm-font-family-monospace: var(--sig-font-mono);
+  --ifm-heading-font-weight: 800;
+  --ifm-font-weight-bold: 700;
+  --ifm-heading-color: var(--sig-ink);
+  --ifm-font-color-base: #2b2b31;
+  --ifm-line-height-base: 1.6;
+  --ifm-heading-line-height: 1.1;
+
+  --ifm-background-color: var(--sig-white);
+  --ifm-background-surface-color: var(--sig-gray-50);
+
+  --ifm-navbar-background-color: rgba(255, 255, 255, 0.82);
+  --ifm-navbar-shadow: inset 0 -1px 0 0 var(--sig-gray-200);
+  --ifm-footer-background-color: var(--sig-ink);
+
+  --ifm-code-font-size: 92%;
+  --ifm-code-background: var(--sig-wash);
+  --ifm-code-color: var(--sig-ultramarine-hover);
+  --ifm-code-border-radius: var(--sig-radius-xs);
+
+  --ifm-button-border-radius: var(--sig-radius-pill);
+  --ifm-button-font-weight: 700;
+  --ifm-card-border-radius: var(--sig-radius-lg);
+  --ifm-global-radius: var(--sig-radius-sm);
+  --ifm-alert-border-radius: var(--sig-radius-md);
+  --ifm-global-shadow-lw: var(--sig-shadow-sm);
+  --ifm-global-shadow-md: var(--sig-shadow-md);
+  --ifm-global-shadow-tl: var(--sig-shadow-lg);
+
+  --ifm-link-color: var(--sig-ultramarine);
+  --ifm-link-hover-color: var(--sig-ultramarine-hover);
+  --ifm-menu-color-active: var(--sig-ultramarine);
+  --ifm-breadcrumb-color-active: var(--sig-ultramarine);
+  --ifm-toc-link-color: var(--sig-gray-500);
+
+  --docusaurus-highlighted-code-line-bg: rgba(59, 69, 253, 0.1);
 }
 
-/* For readability concerns, you should choose a lighter palette in dark mode. */
+/* ==========================================================================
+   2. Dark mode — lighter, higher-contrast blues on near-black surfaces
+   ========================================================================== */
 [data-theme='dark'] {
-  --ifm-color-primary: #25c2a0;
-  --ifm-color-primary-dark: #21af90;
-  --ifm-color-primary-darker: #1fa588;
-  --ifm-color-primary-darkest: #1a8870;
-  --ifm-color-primary-light: #29d5b0;
-  --ifm-color-primary-lighter: #32d8b4;
-  --ifm-color-primary-lightest: #4fddbf;
-  --docusaurus-highlighted-code-line-bg: rgba(0, 0, 0, 0.3);
+  --sig-wash: #20233a;
+  --sig-wash-strong: #2a2f4d;
+  --sig-bubble-received: #2c2c30;
+
+  --ifm-color-primary: #8b93ff;
+  --ifm-color-primary-dark: #6f79ff;
+  --ifm-color-primary-darker: #616bff;
+  --ifm-color-primary-darkest: #3b45fd;
+  --ifm-color-primary-light: #a7adff;
+  --ifm-color-primary-lighter: #b5baff;
+  --ifm-color-primary-lightest: #d5d8ff;
+
+  --ifm-background-color: #17171b;
+  --ifm-background-surface-color: #1f1f23;
+
+  --ifm-heading-color: #f5f5f7;
+  --ifm-font-color-base: #d8d8de;
+
+  --ifm-navbar-background-color: rgba(23, 23, 27, 0.82);
+  --ifm-navbar-shadow: inset 0 -1px 0 0 #2c2c30;
+  --ifm-footer-background-color: #0f0f12;
+
+  --ifm-code-background: #24243a;
+  --ifm-code-color: #b5baff;
+
+  --ifm-link-color: var(--ifm-color-primary);
+  --ifm-link-hover-color: var(--ifm-color-primary-light);
+  --ifm-menu-color-active: var(--ifm-color-primary);
+  --ifm-toc-link-color: var(--sig-gray-400);
+
+  --docusaurus-highlighted-code-line-bg: rgba(139, 147, 255, 0.16);
+}
+
+/* ==========================================================================
+   3. Base type
+   ========================================================================== */
+html {
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  font-feature-settings: 'cv11', 'ss01';
+}
+
+h1,
+.hero__title {
+  letter-spacing: -0.03em;
+}
+h2,
+h3 {
+  letter-spacing: -0.02em;
+}
+
+/* ==========================================================================
+   4. Navbar
+   ========================================================================== */
+.navbar {
+  backdrop-filter: saturate(180%) blur(12px);
+  -webkit-backdrop-filter: saturate(180%) blur(12px);
+}
+.navbar__title {
+  font-weight: 800;
+  letter-spacing: -0.02em;
+}
+.navbar__logo {
+  height: 1.9rem;
+}
+
+/* GitHub icon link in the navbar */
+.navbar__item.navbar__link--github,
+.header-github-link:hover {
+  opacity: 0.8;
+}
+.header-github-link::before {
+  content: '';
+  width: 22px;
+  height: 22px;
+  display: flex;
+  background-color: var(--ifm-navbar-link-color);
+  mask-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 24 24' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12'/%3E%3C/svg%3E");
+  mask-repeat: no-repeat;
+  mask-size: contain;
+}
+
+/* ==========================================================================
+   5. Buttons — Signal pills
+   ========================================================================== */
+.button {
+  border-radius: var(--sig-radius-pill);
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  padding: 0.7rem 1.5rem;
+  border: none;
+  transition: transform 120ms ease, box-shadow 160ms ease, background-color 160ms ease;
+}
+.button--lg {
+  padding: 0.95rem 2rem;
+  font-size: 1.05rem;
+}
+.button--primary {
+  background-color: var(--sig-ultramarine);
+  color: var(--sig-white);
+  box-shadow: var(--sig-shadow-brand);
+}
+.button--primary:hover {
+  background-color: var(--sig-ultramarine-hover);
+  color: var(--sig-white);
+  transform: translateY(-1px);
+}
+.button--primary:active {
+  transform: translateY(0);
+  background-color: var(--sig-ultramarine-active);
+}
+/* "Get Signal" style — white pill with ultramarine text, used on brand fills */
+.button--secondary {
+  background-color: var(--sig-white);
+  color: var(--sig-ultramarine);
+  box-shadow: var(--sig-shadow-md);
+}
+.button--secondary:hover {
+  background-color: var(--sig-gray-50);
+  color: var(--sig-ultramarine-hover);
+  transform: translateY(-1px);
+}
+.button--outline.button--primary {
+  background-color: transparent;
+  color: var(--sig-ultramarine);
+  box-shadow: inset 0 0 0 2px var(--sig-wash-strong);
+}
+.button--outline.button--primary:hover {
+  background-color: var(--sig-wash);
+  color: var(--sig-ultramarine-hover);
+}
+
+/* ==========================================================================
+   6. Cards, alerts, code
+   ========================================================================== */
+.card {
+  border: 1px solid var(--sig-gray-200);
+  box-shadow: var(--sig-shadow-sm);
+  transition: transform 160ms ease, box-shadow 200ms ease, border-color 200ms ease;
+}
+[data-theme='dark'] .card {
+  border-color: #2c2c30;
+}
+.card:hover {
+  box-shadow: var(--sig-shadow-md);
+  transform: translateY(-2px);
+}
+
+.markdown a {
+  font-weight: 600;
+  text-underline-offset: 2px;
+}
+
+div[class^='codeBlockContainer'] {
+  border-radius: var(--sig-radius-md);
+  box-shadow: var(--sig-shadow-sm);
+}
+
+/* Inline code chips */
+code {
+  border: 1px solid transparent;
+}
+[data-theme='light'] code {
+  border-color: var(--sig-wash-strong);
+}
+
+/* Admonitions get Signal-rounded corners */
+.alert,
+.theme-admonition {
+  border-radius: var(--sig-radius-md);
+  border-left-width: 4px;
+}
+
+/* ==========================================================================
+   7. Sidebar / menu
+   ========================================================================== */
+.menu__link {
+  border-radius: var(--sig-radius-sm);
+  font-weight: 500;
+}
+.menu__link--active:not(.menu__link--sublist) {
+  background-color: var(--sig-wash);
+  font-weight: 600;
+}
+.table-of-contents__link--active {
+  font-weight: 600;
+}
+
+/* ==========================================================================
+   8. Footer
+   ========================================================================== */
+.footer--dark {
+  --ifm-footer-link-color: var(--sig-gray-300);
+  --ifm-footer-title-color: var(--sig-white);
+  padding-top: 3.5rem;
+  padding-bottom: 3.5rem;
+}
+.footer__link-item:hover {
+  color: var(--sig-periwinkle-soft);
+}
+
+/* ==========================================================================
+   9. Pagination
+   ========================================================================== */
+.pagination-nav__link {
+  border-radius: var(--sig-radius-lg);
+  border-color: var(--sig-gray-200);
+  transition: border-color 160ms ease, box-shadow 200ms ease;
+}
+.pagination-nav__link:hover {
+  border-color: var(--sig-wash-strong);
+  box-shadow: var(--sig-shadow-sm);
+}
+[data-theme='dark'] .pagination-nav__link {
+  border-color: #2c2c30;
 }
