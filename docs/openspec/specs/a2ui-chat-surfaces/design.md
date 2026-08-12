@@ -4,14 +4,14 @@
 
 signal-mcp is a deliberately thin async adapter: one persistent JSON-RPC TCP connection to a `signal-cli daemon`, a parse layer turning envelopes into `MessageResponse` dataclasses, FastMCP tools for send/receive/react, and an optional channel mode that pushes inbound traffic as `notifications/claude/channel` events. The server holds no conversation history — envelopes are parsed, queued, consumed once, and forgotten. The phone (the primary Signal device) is the durable archive.
 
-ADR-0001 decided to serve A2UI chat surfaces as MCP resource templates following the contract Cairn already ships (`internal/httpapi/mcp_a2ui.go` in https://gitea.stump.rocks/stump.wtf/cairn): MIME `application/a2ui+json`, `audience: ["user"]` annotations, dual-scheme URI registration, and a single-object v0.9 envelope byte-compatible with the host's inline `<a2ui-json>` scanner (Crush, per joestump-agent/crush#217; the `a2ui_action` round-trip landed via joestump-agent/crush#221). This design covers SPEC-0001 (spec.md in this directory): how the surfaces are built, where the data comes from, and why the pieces sit where they do.
+ADR-0001 decided to serve A2UI chat surfaces as MCP resource templates per the A2UI-over-MCP transport guide (https://a2ui.org/guides/a2ui_over_mcp/): MIME `application/a2ui+json`, `audience: ["user"]` annotations, dual-scheme URI registration, and a single-object v0.9 envelope compatible with the deployed host renderer's inline `<a2ui-json>` scanner (Crush, per joestump-agent/crush#217; the `a2ui_action` round-trip landed via joestump-agent/crush#221). Cairn (https://gitea.stump.rocks/stump.wtf/cairn, `internal/httpapi/mcp_a2ui.go`) implements the same transport pattern and is useful purely as reference code — it is not a dependency of this project. This design covers SPEC-0001 (spec.md in this directory): how the surfaces are built, where the data comes from, and why the pieces sit where they do.
 
 ## Goals / Non-Goals
 
 ### Goals
 
 - A human in an A2UI-capable harness who asks about Signal messages or threads sees a native chat surface: two-sided bubbles, sender names, human timestamps, attachment lines, and emoji reactions attached to the messages they target.
-- Byte-level contract parity with Cairn's A2UI envelope, so the one renderer the harness already has covers both servers.
+- Envelope compatibility with the deployed host renderer, so surfaces render with zero host-side changes.
 - Zero behavioral change to every existing tool and to channel mode; resources are purely additive.
 - Bounded, ephemeral memory use — no durability obligations, no new dependencies.
 
@@ -20,13 +20,13 @@ ADR-0001 decided to serve A2UI chat surfaces as MCP resource templates following
 - A durable message archive, search, or backfill from the phone. Joe's chat-archive/msgbrowse tooling owns that concern; this server renders *recent, process-lifetime* traffic only.
 - Attachment media previews (inline images) in v1 — attachments render as textual annotation lines. Presigned S3 URLs are short-lived and host-side fetching of remote media is renderer-policy territory; revisit later.
 - Custom A2UI catalogs or non-standard components.
-- Mutations from the A2UI layer in v1 — buttons are emitted with actionable context but stay inert until the `a2ui_action` tool ships (phase 2, mirroring how Cairn phased it).
+- Mutations from the A2UI layer in v1 — buttons are emitted with actionable context but stay inert until the `a2ui_action` tool ships (phase 2).
 
 ## Decisions
 
 ### Two new modules: `history.py` (buffer) and `a2ui.py` (renderer)
 
-**Choice**: `signal_mcp/history.py` owns a `ConversationBuffer` — an ordered mapping of conversation key → bounded `collections.deque` of `BufferedMessage` entries (direction, sender id/name, text, timestamp, attachments, reactions). `signal_mcp/a2ui.py` owns pure functions that turn a point-in-time snapshot (a plain list) into the envelope dict, mirroring Cairn's small component builders (`a2uiText`, `a2uiCard`, `a2uiColumn`, `a2uiRow`, `a2uiList`, `a2uiButton`).
+**Choice**: `signal_mcp/history.py` owns a `ConversationBuffer` — an ordered mapping of conversation key → bounded `collections.deque` of `BufferedMessage` entries (direction, sender id/name, text, timestamp, attachments, reactions). `signal_mcp/a2ui.py` owns pure functions that turn a point-in-time snapshot (a plain list) into the envelope dict via small per-component builder helpers (text, card, column, row, list, button).
 **Rationale**: the renderer is pure data-in/JSON-out, so golden-file tests pin the envelope contract exactly; the buffer is separately unit-testable for bounds, eviction, and gating. Both stay stdlib-only.
 **Alternatives considered**:
 - Render inline in the resource handlers: untestable without an MCP session; couples contract to transport.
@@ -60,8 +60,8 @@ ADR-0001 decided to serve A2UI chat surfaces as MCP resource templates following
 
 ### Envelope pinned to the v0.9 single-object form
 
-**Choice**: emit exactly `{"version": "v0.9", "updateComponents": {"surfaceId", "catalogId", "components"}}` with the standard-catalog `catalogId`, as one JSON object (not a JSONL message stream), matching Cairn's `a2uiEnvelope` byte-for-byte in shape.
-**Rationale**: this is what the host's renderer consumes today for Cairn; a spec-pure JSONL stream or a v0.9.1/v1.0 envelope would be more "correct" per a2ui.org and render nowhere in this stack. The version lives in one module constant; bumping it is a coordinated change with Cairn and the host.
+**Choice**: emit exactly `{"version": "v0.9", "updateComponents": {"surfaceId", "catalogId", "components"}}` with the standard-catalog `catalogId`, as one JSON object (not a JSONL message stream), matching what the deployed renderer consumes.
+**Rationale**: this is what the host's renderer parses today; a spec-pure JSONL stream or a v0.9.1/v1.0 envelope would be more "correct" per a2ui.org and render nowhere in this stack. The version lives in one module constant; bumping it is a coordinated change with the host renderer.
 **Alternatives considered**:
 - JSONL stream (`createSurface` + `updateComponents` lines): per-spec canonical, unsupported by the deployed renderer; rejected for now.
 - v1.0 candidate envelope with action IDs: premature until the host renderer moves.
@@ -69,8 +69,8 @@ ADR-0001 decided to serve A2UI chat surfaces as MCP resource templates following
 ### Resource registration and URI handling
 
 **Choice**: register four resources against two handlers — `signal://conversation/{id}/a2ui` + `mcp://signal/conversation/{id}/a2ui` (thread) and `signal://conversations/a2ui` + `mcp://signal/conversations/a2ui` (index) — each declaring `mime_type="application/a2ui+json"`. `{id}` is percent-decoded with `urllib.parse.unquote` before lookup (Signal group ids are base64 and may contain `/` and `=`). Handlers snapshot the buffer synchronously and return the rendered envelope; they never touch the daemon.
-**Rationale**: dual registration copies Cairn — template matching is literal, and both the host's plumbing and a hand-typed @-mention should resolve. Read handlers that never RPC make "reading MUST NOT mutate state" trivially true (SPEC-0001 REQ "Conversation Thread Resource").
-**Known mechanics risk**: FastMCP in `mcp>=1.29` supports `mime_type` on resources; whether it exposes resource *annotations* (`audience`) at the decorator level needs a spike. If it does not, the fallback is registering via the underlying low-level server (as Cairn does with the Go SDK) — the first implementation story carries this spike.
+**Rationale**: template matching is literal, and both the host's plumbing and a hand-typed @-mention should resolve. Read handlers that never RPC make "reading MUST NOT mutate state" trivially true (SPEC-0001 REQ "Conversation Thread Resource").
+**Known mechanics risk**: FastMCP in `mcp>=1.29` supports `mime_type` on resources; whether it exposes resource *annotations* (`audience`) at the decorator level needs a spike. If it does not, the fallback is registering via the underlying low-level server API — the first implementation story carries this spike.
 
 ### Why spec.md has no boilerplate web-security or HTML-accessibility sections
 
@@ -133,7 +133,7 @@ Card
 ## Risks / Trade-offs
 
 - **FastMCP may not expose resource annotations (`audience`)** → spike in the foundation story; fall back to low-level server registration. Worst case, ship without the annotation (hosts still route on MIME type) and note the gap.
-- **A2UI spec churn (v0.9 emitted; v0.9.1 current; v1.0 candidate)** → version and catalog id are single constants; bumps are coordinated with Cairn and the host renderer rather than tracked eagerly.
+- **A2UI spec churn (v0.9 emitted; v0.9.1 current; v1.0 candidate)** → version and catalog id are single constants; bumps are coordinated with the host renderer rather than tracked eagerly.
 - **Memory growth** → both caps (per-conversation, total conversations) are configurable and enforced with LRU eviction; worst case is bounded and small (text-only entries; attachments are metadata, never bytes).
 - **Threads can still be incomplete** — messages sent by *other* JSON-RPC clients of the same daemon produce no notification we see → accepted per ADR-0001; the empty/partial state text is honest about process-lifetime scope.
 - **Reaction targets missing from buffer** (reaction to a message that predates process start) → ignored for rendering by design; no orphan rows.
@@ -152,4 +152,4 @@ Greenfield and additive — no schema, no persisted state, no changed tool shape
 
 - Does `mcp` 1.29 FastMCP expose resource annotations, or is low-level registration required? (Spike in the first story.)
 - Should attachment images eventually render as A2UI `Image` components using S3 presigned URLs, given their short TTL and host fetch policy? (Deferred; textual lines in v1.)
-- Exact `a2ui_action` tool contract for phase 2 — adopt Cairn's `a2ui_action`/`a2ui_error` naming and shape once its host-side behavior is observed in the wild.
+- Exact `a2ui_action` tool contract for phase 2 — adopt the `a2ui_action`/`a2ui_error` naming and shape the host's round-trip (joestump-agent/crush#221) expects.

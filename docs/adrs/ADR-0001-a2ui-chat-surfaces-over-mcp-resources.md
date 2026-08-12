@@ -16,45 +16,45 @@ How should signal-mcp serve rendered chat interfaces for Signal messages and con
 ## Decision Drivers
 
 * **Rendering gap**: A2UI-capable hosts render `application/a2ui+json` payloads as native UI; everything else gets paraphrased by the model. Raw `MessageResponse` JSON is the worst-case presentation of an inherently visual artifact (a chat thread).
-* **House precedent**: Cairn (https://gitea.stump.rocks/stump.wtf/cairn, `internal/httpapi/mcp_a2ui.go`) already ships A2UI-over-MCP resources that render in the same harness: `<entity>/{id}/a2ui` URI suffix, MIME `application/a2ui+json`, `audience: user` annotations, and a single-object v0.9 envelope (`{"version":"v0.9","updateComponents":{...}}`) byte-compatible with the host's inline `<a2ui-json>` scanner. Diverging from that contract would force the renderer to support a second dialect.
+* **Deployed-renderer compatibility**: the A2UI-capable host in use (Crush, per joestump-agent/crush#217) consumes single-object v0.9 envelopes (`{"version":"v0.9","updateComponents":{...}}`) through its inline `<a2ui-json>` scanner, routes on MIME `application/a2ui+json`, and honors `audience: user` annotations. Emitting what the deployed renderer actually parses matters more than tracking the newest spec revision.
 * **No history exists**: signal-cli's JSON-RPC surface has no "list past messages" method — the daemon streams envelopes as they arrive, and the phone (the primary device) is the durable source of truth. A thread view needs message data the server currently discards after handing it to one consumer.
 * **Thin-adapter philosophy**: the server intentionally holds no durable state (config, one TCP socket, one in-memory queue). Introducing a second durable message archive would create sync/retention/privacy obligations the project has deliberately avoided.
 * **Single-consumer receive invariant**: the daemon's receive queue has exactly one consumer (`receive_message` *or* the channel forwarder). A history mechanism must observe messages without becoming a competing consumer.
 * **Trust boundary**: the trusted-senders allowlist drops untrusted messages before they reach the model. A rendered surface must not become a side channel that displays content the trust gate would have dropped.
 * **Dependency discipline**: runtime deps are `mcp` + `anyio` only. The solution should be stdlib + existing deps.
-* **Interactivity**: the user explicitly wants reactions visible in the chat surface; reply/react *actions* from the surface should ride the same `a2ui_action` round-trip the host already supports for Cairn, not a bespoke mechanism.
+* **Interactivity**: the user explicitly wants reactions visible in the chat surface; reply/react *actions* from the surface should ride the `a2ui_action` round-trip the host already supports, not a bespoke mechanism.
 
 ## Considered Options
 
-* **Option 1**: A2UI resource templates (Cairn conventions) backed by a bounded in-memory conversation buffer
+* **Option 1**: A2UI resource templates backed by a bounded in-memory conversation buffer
 * **Option 2**: Tool-based A2UI delivery only (a `render_thread` tool returning an embedded A2UI resource)
 * **Option 3**: Persistent message store (SQLite) powering A2UI surfaces and history tools
 * **Option 4**: Status quo — leave rendering to the host model (markdown) or share HTML via Cairn
 
 ## Decision Outcome
 
-Chosen option: **Option 1 — A2UI resource templates backed by a bounded in-memory conversation buffer**, because it follows the exact contract already proven to render in the target harness (Cairn's), satisfies the "ask about messages and threads, get a chat UI back" requirement, and preserves the thin-adapter architecture: the buffer is a bounded, ephemeral projection of traffic the server already saw, not a second archive competing with the phone.
+Chosen option: **Option 1 — A2UI resource templates backed by a bounded in-memory conversation buffer**, because it follows the exact contract already proven to render in the target harness, satisfies the "ask about messages and threads, get a chat UI back" requirement, and preserves the thin-adapter architecture: the buffer is a bounded, ephemeral projection of traffic the server already saw, not a second archive competing with the phone.
 
 Concretely:
 
 1. **Resource templates** (read-only at the A2UI layer, mutations stay on the existing tools):
    * `signal://conversation/{id}/a2ui` — a chat-thread surface for one conversation (`{id}` is an E.164 number or a group id), rendered newest-last as chat bubbles with sender name, timestamp, attachment annotations, and emoji reactions attached to the message they target.
    * `signal://conversations/a2ui` — an index surface listing buffered conversations (peer/group, last message preview, count).
-   * Each is dual-registered under `mcp://signal/...` and `signal://...` (Cairn precedent: hosts and hand-written @-mentions name both forms; template matching is literal).
-2. **Wire contract**: MIME `application/a2ui+json`; `audience: ["user"]` annotations (the model keeps using the existing JSON tools); payload is the single-object v0.9 envelope `{"version": "v0.9", "updateComponents": {"surfaceId", "catalogId", "components": [...]}}` against the standard A2UI catalog only — byte-compatible with Crush's inline `<a2ui-json>` scanner, exactly as Cairn emits.
+   * Each is dual-registered under `mcp://signal/...` and `signal://...` (hosts and hand-written @-mentions name both forms; template matching is literal).
+2. **Wire contract**: MIME `application/a2ui+json`; `audience: ["user"]` annotations (the model keeps using the existing JSON tools); payload is the single-object v0.9 envelope `{"version": "v0.9", "updateComponents": {"surfaceId", "catalogId", "components": [...]}}` against the standard A2UI catalog only — byte-compatible with the host renderer's inline `<a2ui-json>` scanner.
 3. **Conversation buffer**: a new `signal_mcp/history.py` module holding per-conversation `collections.deque` ring buffers (bounded per conversation and in total), fed from a single tap where envelopes are parsed (covering both the `receive_message` path and the channel forwarder without becoming a second queue consumer) plus outbound `send`/`sendReaction` calls (so the agent's own replies appear in the thread). Reactions attach to buffered messages by `(target_author, target_timestamp)`. The trusted-senders gate applies to what the buffer records, so surfaces can never display content the trust boundary dropped.
 4. **Ephemeral by design**: a restart clears the buffer; the surface renders an honest empty state. The phone remains the only durable archive — consistent with the existing "a brief daemon outage never loses data" stance.
-5. **Interactivity is phased**: v1 surfaces are read-only; Buttons (reply, react) are emitted with action names/context so an `a2ui_action`-capable host can wire them, mirroring how Cairn shipped surfaces first and the action round-trip second.
+5. **Interactivity is phased**: v1 surfaces are read-only; Buttons (reply, react) are emitted with action names/context so an `a2ui_action`-capable host can wire them once the action round-trip is adopted here.
 
 ### Consequences
 
 * Good, because a human in an A2UI harness asking about Signal messages or threads gets a native chat UI — bubbles, names, reactions — instead of a JSON blob.
-* Good, because the envelope, URI shape, MIME type, and annotations are identical to Cairn's, so the one renderer the harness already has covers both servers with zero new host work.
+* Good, because the envelope, URI shape, MIME type, and annotations match what the deployed renderer already parses, so the feature ships with zero new host work.
 * Good, because the buffer is bounded and ephemeral: no retention policy, no migration, no second source of truth, no new dependencies.
 * Good, because tapping at the parse layer keeps the single-consumer receive invariant intact — history observes, it never consumes.
 * Bad, because thread history only covers the current process lifetime: after a restart the surface is empty until traffic flows. "Show me last week's thread" is out of scope by construction.
 * Bad, because outbound messages sent by *other* clients of the same daemon (or from the phone, except via sync envelopes signal-cli forwards) may not appear, so a thread can be one-sided in edge cases.
-* Bad, because A2UI is a moving spec (v0.9.1 current, v1.0 candidate): a future envelope bump must stay coordinated with Cairn and the host renderer.
+* Bad, because A2UI is a moving spec (v0.9.1 current, v1.0 candidate): a future envelope bump must stay coordinated with the host renderer.
 * Neutral, because untrusted senders' traffic is absent from surfaces — correct per the trust model, but a surface can therefore differ from what the phone shows.
 
 ### Confirmation
@@ -70,11 +70,11 @@ Concretely:
 
 Resources under `signal://.../a2ui` serve v0.9 envelopes rendered from bounded per-conversation ring buffers.
 
-* Good, because it matches the proven Cairn contract end-to-end (URI, MIME, envelope, annotations) — no new renderer work in the host.
+* Good, because it matches the contract the deployed host renderer consumes end-to-end (URI, MIME, envelope, annotations) — no new renderer work.
 * Good, because resources are addressable and re-readable: the user (or host) can re-open a thread surface at any time without replaying tools.
 * Good, because the buffer is small, stdlib-only, and ephemeral — no durability obligations, no privacy expansion beyond what the process already saw.
 * Good, because `audience: user` annotations keep a clean split: surfaces for the human, existing JSON tools for the model.
-* Neutral, because rendering is a pure projection — resolving and re-projecting the same data the JSON paths use (Cairn's "thin adapter" rule).
+* Neutral, because rendering is a pure projection — resolving and re-projecting the same data the JSON paths use, keeping the thin-adapter shape intact.
 * Bad, because history is process-lifetime only and partially one-sided for messages sent outside this server.
 
 ### Option 2: Tool-based A2UI delivery only
@@ -84,7 +84,7 @@ No resources; a `render_thread(conversation_id)` tool returns the A2UI payload a
 * Good, because tool responses are the other sanctioned A2UI-over-MCP delivery channel and need no resource support in the host.
 * Good, because it could reuse the same renderer internals as Option 1.
 * Bad, because it still needs the conversation buffer — the hard part — while delivering less: surfaces are not addressable, not listable, and not re-readable without another tool round-trip through the model.
-* Bad, because it diverges from the Cairn house pattern (resources first), fragmenting how Joe's servers expose A2UI.
+* Bad, because the surface exists only inside a transient tool result — hosts that surface resources through pickers or @-mentions never discover it.
 * Bad, because every view costs a model turn; a resource read is host-initiated and free of model involvement.
 
 ### Option 3: Persistent message store (SQLite)
@@ -131,6 +131,6 @@ flowchart TD
 
 * A2UI over MCP transport guide: https://a2ui.org/guides/a2ui_over_mcp/
 * A2UI specification (v0.9.1 current): https://a2ui.org/specification/v0.9.1-a2ui/ · message reference: https://a2ui.org/reference/messages/
-* Cairn's implementation (house precedent): https://gitea.stump.rocks/stump.wtf/cairn — `internal/httpapi/mcp_a2ui.go` (envelope builders, dual-scheme registration, `audience: user` annotations) and its MCP instructions block advertising the `/a2ui` resource templates.
-* Host-side A2UI support: joestump-agent/crush#217 (A2UI-over-MCP epic) and joestump-agent/crush#221 (`a2ui_action` round-trip, since landed — the live Cairn MCP exposes `a2ui_action`/`a2ui_error`).
+* Host-side A2UI support: joestump-agent/crush#217 (A2UI-over-MCP epic) and joestump-agent/crush#221 (`a2ui_action` round-trip, since landed).
+* Prior art / worked example (not a dependency of this project): Cairn implements the same transport pattern — https://gitea.stump.rocks/stump.wtf/cairn, `internal/httpapi/mcp_a2ui.go`.
 * SPEC-0001 (a2ui-chat-surfaces) formalizes the requirements this decision governs.

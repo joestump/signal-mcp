@@ -8,7 +8,7 @@ implements: [ADR-0001]
 
 ## Overview
 
-signal-mcp serves rendered chat interfaces for Signal conversations to A2UI-capable MCP hosts, so a human asking about Signal messages or threads sees native chat UI — message bubbles, sender names, timestamps, attachments, and emoji reactions — instead of raw JSON or model-paraphrased markdown. Surfaces are read-only projections served as MCP resources with MIME `application/a2ui+json`, backed by a bounded in-memory conversation buffer. See ADR-0001 (A2UI Chat Surfaces over MCP Resource Templates) for the governing decision and the Cairn precedent this contract follows.
+signal-mcp serves rendered chat interfaces for Signal conversations to A2UI-capable MCP hosts, so a human asking about Signal messages or threads sees native chat UI — message bubbles, sender names, timestamps, attachments, and emoji reactions — instead of raw JSON or model-paraphrased markdown. Surfaces are read-only projections served as MCP resources with MIME `application/a2ui+json`, backed by a bounded in-memory conversation buffer. See ADR-0001 (A2UI Chat Surfaces over MCP Resource Templates) for the governing decision.
 
 ## Requirements
 
@@ -71,7 +71,7 @@ Emoji reactions SHALL be attached to the buffered message identified by the reac
 
 ### Requirement: Conversation Thread Resource
 
-The server SHALL register an MCP resource template serving a chat-thread surface for one conversation, dual-registered as `signal://conversation/{id}/a2ui` and `mcp://signal/conversation/{id}/a2ui` (both routes to the same handler, per the Cairn precedent).
+The server SHALL register an MCP resource template serving a chat-thread surface for one conversation, dual-registered as `signal://conversation/{id}/a2ui` and `mcp://signal/conversation/{id}/a2ui` (both routing to the same handler).
 
 - The resource SHALL declare MIME type `application/a2ui+json` and audience annotation `["user"]`.
 - `{id}` SHALL be percent-decoded before lookup and accepts either an E.164 number or a Signal group id (group ids are base64 and can contain `/` and `=`, so callers MUST percent-encode them).
@@ -114,7 +114,7 @@ The server SHALL register an MCP resource serving an index of buffered conversat
 
 ### Requirement: A2UI Envelope Contract
 
-Every A2UI resource payload SHALL be the single-object v0.9 envelope `{"version": "v0.9", "updateComponents": {"surfaceId": ..., "catalogId": ..., "components": [...]}}`, byte-compatible with the envelope Cairn emits and the host's inline `<a2ui-json>` scanner consumes (per ADR-0001).
+Every A2UI resource payload SHALL be the single-object v0.9 envelope `{"version": "v0.9", "updateComponents": {"surfaceId": ..., "catalogId": ..., "components": [...]}}`, compatible with the inline `<a2ui-json>` message shape A2UI host renderers consume (per ADR-0001).
 
 - `catalogId` SHALL identify the standard A2UI catalog; components MUST be limited to standard-catalog component types.
 - The component list MUST form a valid adjacency list: component ids unique within the surface, exactly one root, and every referenced child id present in the list.
@@ -145,7 +145,7 @@ A2UI surfaces are for the human; the model's programmatic surface is unchanged.
 
 ### Requirement: Interactive Actions
 
-Surfaces SHALL be read-only at the A2UI layer in the first release; interaction arrives via the `a2ui_action` round-trip, phased per the Cairn precedent.
+Surfaces SHALL be read-only at the A2UI layer in the first release; interaction arrives via the `a2ui_action` round-trip in a later phase.
 
 - Thread-surface bubbles SHOULD include Button components for "reply" and "react", each carrying an action name and a context object with the conversation id, `target_author`, and `target_timestamp` — sufficient for an `a2ui_action`-capable host to wire them. Until the action tool ships, these buttons are inert placeholders.
 - When the server ships an `a2ui_action` tool, it MUST dispatch exclusively to the existing send paths (`_send_message` / `_send_reaction`) and MUST enforce the trusted-recipients allowlist and group resolution exactly as the existing tools do. Action handling MUST NOT introduce a send path that bypasses `_ensure_trusted` / `_ensure_trusted_group`.
