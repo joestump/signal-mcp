@@ -24,7 +24,7 @@ The server SHALL maintain an in-memory, per-conversation message buffer as the s
   - a **total conversation cap** (default 50), enforced LRU — recording traffic for a new conversation beyond the cap silently evicts the least-recently-active conversation in its entirety;
   - a **per-message stored-text cap** (default 4 KiB) — longer bodies are truncated at record time with an explicit truncation marker in the stored text.
 - Eviction and truncation MUST be silent (logged at debug level, never raised as an error) and MUST NOT block, delay, or fail message delivery. There is no failure mode in which a full buffer affects the existing tool or channel paths.
-- Attachments SHALL be recorded as metadata only (id, filename, content type, size) — never file bytes.
+- Attachments SHALL be recorded as metadata only — id, filename, content type, size — never file bytes. Sender-controlled metadata strings (filename, content type) SHALL be truncated to 256 bytes at record time. The local path and presigned URL are deliberately NOT buffered: paths may be deleted and presigned URLs expire, so surfaces render name/type/size only.
 - Stored reactions SHALL follow Signal's replace-by-author semantics — one reaction per author per message, with a newer reaction from the same author replacing the older — bounding per-message reaction growth.
 - The buffer is **in-memory only** and MUST NOT be persisted to disk. A server restart yields an empty buffer; the phone remains the only durable archive (per ADR-0001).
 
@@ -42,6 +42,11 @@ The server SHALL maintain an in-memory, per-conversation message buffer as the s
 
 - **WHEN** the total conversation cap is reached and a message arrives for a previously unseen conversation
 - **THEN** the least-recently-active conversation is evicted in its entirety, the new conversation is recorded, and message delivery is unaffected
+
+#### Scenario: Attachment-heavy traffic stays metadata-sized
+
+- **WHEN** a message arrives carrying large file attachments (e.g. a multi-megabyte image)
+- **THEN** the buffer grows only by the bounded metadata fields — no file bytes are read or stored, and the stored entry's size is independent of the attachment's size
 
 #### Scenario: Oversized message is truncated, not dropped
 
@@ -151,11 +156,17 @@ Every A2UI resource payload SHALL be the single-object v0.9 envelope `{"version"
 - `catalogId` SHALL identify the standard A2UI catalog; components MUST be limited to standard-catalog component types.
 - The component list MUST form a valid adjacency list: component ids unique within the surface, exactly one root, and every referenced child id present in the list.
 - All Signal-derived strings (message text, sender names, group names, filenames) MUST be emitted as literal component text values. They MUST NOT be interpreted as component structure, ids, action names, or data-binding paths — a message whose text looks like A2UI JSON renders as text.
+- Payloads MUST NOT embed attachment bytes: no `data:` URIs or base64 file content in any component. Attachments render as textual descriptions; any future preview support renders by reference only — keeping payload size independent of media size.
 
 #### Scenario: Envelope matches the golden contract
 
 - **WHEN** a surface is rendered from a deterministic seeded buffer
 - **THEN** the payload equals the checked-in golden envelope: version `v0.9`, an `updateComponents` object with the standard `catalogId`, and a well-formed component adjacency list
+
+#### Scenario: Media never inflates the envelope
+
+- **WHEN** a thread renders messages carrying image or file attachments
+- **THEN** the payload contains only textual attachment descriptions and its byte size is independent of the attachment file sizes
 
 #### Scenario: Hostile message text stays inert
 

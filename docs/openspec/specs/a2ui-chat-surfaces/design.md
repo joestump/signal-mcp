@@ -18,7 +18,7 @@ ADR-0001 decided to serve A2UI chat surfaces as MCP resource templates per the A
 ### Non-Goals
 
 - A durable message archive, search, or backfill from the phone. Joe's chat-archive/msgbrowse tooling owns that concern; this server renders *recent, process-lifetime* traffic only.
-- Attachment media previews (inline images) in v1 — attachments render as textual annotation lines. Presigned S3 URLs are short-lived and host-side fetching of remote media is renderer-policy territory; revisit later.
+- Attachment media previews (inline images) in v1 — attachments render as textual annotation lines. Presigned S3 URLs are short-lived and host-side fetching of remote media is renderer-policy territory; revisit later. If previews ever land they will be by-reference only — embedded bytes in an envelope are ruled out by SPEC-0001's envelope contract.
 - Custom A2UI catalogs or non-standard components.
 - Mutations from the A2UI layer in v1 — buttons are emitted with actionable context but stay inert until the `a2ui_action` tool ships (phase 2).
 
@@ -60,7 +60,9 @@ ADR-0001 decided to serve A2UI chat surfaces as MCP resource templates per the A
 
 ### Bounded three ways; overrun is silent and never touches delivery
 
-**Choice**: three independent, configurable caps — per-conversation messages (default 200, FIFO eviction of that conversation's oldest), total conversations (default 50, LRU eviction of the least-recently-active conversation wholesale), and per-message stored text (default 4 KiB, truncation with a marker at record time). Recording is synchronous deque/dict work with no failure path that propagates: eviction and truncation log at debug level and delivery proceeds untouched. Reactions store replace-by-author (Signal's own semantics), so a message's reaction list is bounded by distinct reacting authors, not reaction volume. Attachments store metadata only, never bytes.
+**Choice**: three independent, configurable caps — per-conversation messages (default 200, FIFO eviction of that conversation's oldest), total conversations (default 50, LRU eviction of the least-recently-active conversation wholesale), and per-message stored text (default 4 KiB, truncation with a marker at record time). Recording is synchronous deque/dict work with no failure path that propagates: eviction and truncation log at debug level and delivery proceeds untouched. Reactions store replace-by-author (Signal's own semantics), so a message's reaction list is bounded by distinct reacting authors, not reaction volume.
+
+Attachment handling is where a memory problem would hide, so it is pinned twice. Inbound file bytes never enter this process at all — signal-cli writes them to its attachments directory on disk, and the parse layer only resolves path strings. The buffer records four metadata fields (id, filename, content type, size) with sender-controlled strings truncated at 256 bytes; the local path and presigned URL are deliberately not buffered, because paths can be deleted and presigned URLs expire — a thread rendered weeks into a process's life would otherwise show dead links. Surfaces render name/type/size, and the envelope contract forbids embedded bytes outright, so payload size is independent of media size.
 **Rationale**: "bounded" is only meaningful with the semantics pinned. FIFO-within/LRU-across matches how a phone's conversation list behaves; the text cap turns worst-case memory from unbounded into arithmetic: 50 conversations × 200 messages × 4 KiB ≈ **40 MiB theoretical ceiling** (plus per-object overhead) at pathological fill — typical Signal traffic sits orders of magnitude lower, and all three caps tune down for constrained hosts. A full buffer that could error, block, or drop a *delivery* would invert the feature's priorities; history is strictly a bystander.
 **Alternatives considered**:
 - Reject-new instead of evict-oldest at the cap: threads would freeze in the past while the conversation continues; rejected.
@@ -152,6 +154,7 @@ Card
 - **FastMCP may not expose resource annotations (`audience`)** → spike in the foundation story; fall back to low-level server registration. Worst case, ship without the annotation (hosts still route on MIME type) and note the gap.
 - **A2UI spec churn (v0.9 emitted; v0.9.1 current; v1.0 candidate)** → version and catalog id are single constants; bumps are coordinated with the host renderer rather than tracked eagerly.
 - **Memory growth** → three configurable caps (messages/conversation FIFO, conversations LRU, stored text/message); worst case at defaults is ~40 MiB (50 × 200 × 4 KiB) plus object overhead, typical usage far lower; attachments are metadata, never bytes.
+- **Envelope bloat from media** → ruled out by construction: payloads carry textual attachment lines only (no `data:` URIs, no base64), so envelope size is independent of attachment sizes.
 - **Divergent per-instance histories confuse users** → structural, not a bug (per-instance daemon connections, lifetimes, and own-sends); every surface carries the instance-scope caption with the process start time, and the docs state the phone is the only complete record.
 - **Threads can still be incomplete** — messages sent by *other* JSON-RPC clients of the same daemon produce no notification we see → accepted per ADR-0001; the empty/partial state text is honest about process-lifetime scope.
 - **Reaction targets missing from buffer** (reaction to a message that predates process start) → ignored for rendering by design; no orphan rows.
