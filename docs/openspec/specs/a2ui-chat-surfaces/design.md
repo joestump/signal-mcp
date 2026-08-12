@@ -58,6 +58,23 @@ ADR-0001 decided to serve A2UI chat surfaces as MCP resource templates per the A
 **Choice**: group id when present; otherwise the counterparty's number — the sender for inbound DMs, the destination for outbound and sync-sent DMs, and the operator's own number for Note-to-Self (where sender == account == destination).
 **Rationale**: matches how a phone groups threads; one deterministic key function shared by record and lookup, unit-tested against each traffic shape.
 
+### Bounded three ways; overrun is silent and never touches delivery
+
+**Choice**: three independent, configurable caps — per-conversation messages (default 200, FIFO eviction of that conversation's oldest), total conversations (default 50, LRU eviction of the least-recently-active conversation wholesale), and per-message stored text (default 4 KiB, truncation with a marker at record time). Recording is synchronous deque/dict work with no failure path that propagates: eviction and truncation log at debug level and delivery proceeds untouched. Reactions store replace-by-author (Signal's own semantics), so a message's reaction list is bounded by distinct reacting authors, not reaction volume. Attachments store metadata only, never bytes.
+**Rationale**: "bounded" is only meaningful with the semantics pinned. FIFO-within/LRU-across matches how a phone's conversation list behaves; the text cap turns worst-case memory from unbounded into arithmetic: 50 conversations × 200 messages × 4 KiB ≈ **40 MiB theoretical ceiling** (plus per-object overhead) at pathological fill — typical Signal traffic sits orders of magnitude lower, and all three caps tune down for constrained hosts. A full buffer that could error, block, or drop a *delivery* would invert the feature's priorities; history is strictly a bystander.
+**Alternatives considered**:
+- Reject-new instead of evict-oldest at the cap: threads would freeze in the past while the conversation continues; rejected.
+- No text cap: one pathological 100 KB message ×10 000 slots dominates memory; rejected.
+
+### Instance-local by design; divergence is disclosed, not hidden
+
+**Choice**: each server process owns a private buffer — no cross-instance synchronization, no shared storage, no attempt to reconcile. Every surface (thread and index, populated or empty) carries a scope caption with the process start time: the view is *this instance's* in-memory window, and the phone is the complete record.
+**Rationale**: multiple instances routinely coexist against one daemon (channel-mode sessions, scheduled tasks, ad-hoc use). Each gets the daemon's receive notifications on its own connection, but starts at a different time and records only its *own* outbound sends — so divergence between instances is structural, not a bug. The honest options are shared external state (re-opens everything ADR-0001 rejected in the SQLite option: durability, retention, a second archive) or disclosure. Disclosure costs one caption.
+**Alternatives considered**:
+- Shared SQLite/redis buffer: reintroduces the persistent-store obligations ADR-0001 explicitly rejected; rejected.
+- Daemon-side history: signal-cli exposes no such RPC; not buildable.
+- Silent divergence (no caption): users comparing two agents' surfaces would reasonably conclude one is broken; rejected.
+
 ### Envelope pinned to the v0.9 single-object form
 
 **Choice**: emit exactly `{"version": "v0.9", "updateComponents": {"surfaceId", "catalogId", "components"}}` with the standard-catalog `catalogId`, as one JSON object (not a JSONL message stream), matching what the deployed renderer consumes.
@@ -119,7 +136,7 @@ Thread-surface component tree (standard catalog, adjacency list):
 Card
 └── Column
     ├── Text (heading: conversation label)
-    ├── Text (caption: "N buffered messages · history is process-lifetime only")
+    ├── Text (caption: "This instance's view since {process start} · N buffered messages · the phone is the complete record")
     ├── Divider
     └── List
         └── per message: Column
@@ -134,7 +151,8 @@ Card
 
 - **FastMCP may not expose resource annotations (`audience`)** → spike in the foundation story; fall back to low-level server registration. Worst case, ship without the annotation (hosts still route on MIME type) and note the gap.
 - **A2UI spec churn (v0.9 emitted; v0.9.1 current; v1.0 candidate)** → version and catalog id are single constants; bumps are coordinated with the host renderer rather than tracked eagerly.
-- **Memory growth** → both caps (per-conversation, total conversations) are configurable and enforced with LRU eviction; worst case is bounded and small (text-only entries; attachments are metadata, never bytes).
+- **Memory growth** → three configurable caps (messages/conversation FIFO, conversations LRU, stored text/message); worst case at defaults is ~40 MiB (50 × 200 × 4 KiB) plus object overhead, typical usage far lower; attachments are metadata, never bytes.
+- **Divergent per-instance histories confuse users** → structural, not a bug (per-instance daemon connections, lifetimes, and own-sends); every surface carries the instance-scope caption with the process start time, and the docs state the phone is the only complete record.
 - **Threads can still be incomplete** — messages sent by *other* JSON-RPC clients of the same daemon produce no notification we see → accepted per ADR-0001; the empty/partial state text is honest about process-lifetime scope.
 - **Reaction targets missing from buffer** (reaction to a message that predates process start) → ignored for rendering by design; no orphan rows.
 - **Untested contract drift against the host renderer** → golden-file envelope tests pin our side; a manual Crush read is the release check (ADR-0001 Confirmation).

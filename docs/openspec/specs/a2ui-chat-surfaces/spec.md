@@ -19,8 +19,14 @@ The server SHALL maintain an in-memory, per-conversation message buffer as the s
 - The conversation key SHALL be the group id for group messages, otherwise the peer's number (the counterparty for direct messages; the operator's own number for Note-to-Self traffic).
 - Inbound messages and reactions SHALL be recorded from a single tap at the envelope-parse layer, so both the `receive_message` path and the channel-forwarder path populate the buffer identically. The tap MUST NOT consume from, reorder, or delay the daemon receive queue — the single-consumer invariant of the existing design is preserved.
 - Outbound messages and reactions sent through this server's tools (`send`, `send_message_to_user`, `send_message_to_group`, `send_reaction_to_user`, `send_reaction_to_group`) SHALL be recorded into the same buffer after a successful daemon RPC, attributed to the server's account, so the agent's own replies appear in thread surfaces.
-- The buffer SHALL be bounded: a per-conversation message cap and a total conversation cap (defaults: 200 messages per conversation, 50 conversations), with least-recently-active eviction at both levels. Both caps SHALL be configurable via CLI flags and environment variables following the existing `signal_mcp.config` conventions.
-- The buffer MUST NOT be persisted to disk. A server restart yields an empty buffer; the phone remains the only durable archive (per ADR-0001).
+- The buffer SHALL be bounded at three levels, each configurable via CLI flags and environment variables following the existing `signal_mcp.config` conventions:
+  - a **per-conversation message cap** (default 200), enforced FIFO — recording a message beyond the cap silently evicts that conversation's oldest message;
+  - a **total conversation cap** (default 50), enforced LRU — recording traffic for a new conversation beyond the cap silently evicts the least-recently-active conversation in its entirety;
+  - a **per-message stored-text cap** (default 4 KiB) — longer bodies are truncated at record time with an explicit truncation marker in the stored text.
+- Eviction and truncation MUST be silent (logged at debug level, never raised as an error) and MUST NOT block, delay, or fail message delivery. There is no failure mode in which a full buffer affects the existing tool or channel paths.
+- Attachments SHALL be recorded as metadata only (id, filename, content type, size) — never file bytes.
+- Stored reactions SHALL follow Signal's replace-by-author semantics — one reaction per author per message, with a newer reaction from the same author replacing the older — bounding per-message reaction growth.
+- The buffer is **in-memory only** and MUST NOT be persisted to disk. A server restart yields an empty buffer; the phone remains the only durable archive (per ADR-0001).
 
 #### Scenario: Inbound message is buffered in both modes
 
@@ -30,12 +36,31 @@ The server SHALL maintain an in-memory, per-conversation message buffer as the s
 #### Scenario: Per-conversation cap evicts oldest first
 
 - **WHEN** a conversation receives more messages than the per-conversation cap
-- **THEN** the oldest buffered messages are evicted first and the buffer length never exceeds the cap
+- **THEN** the oldest buffered messages are evicted first (FIFO) and the buffer length never exceeds the cap
+
+#### Scenario: Conversation cap evicts the least-recently-active conversation
+
+- **WHEN** the total conversation cap is reached and a message arrives for a previously unseen conversation
+- **THEN** the least-recently-active conversation is evicted in its entirety, the new conversation is recorded, and message delivery is unaffected
+
+#### Scenario: Oversized message is truncated, not dropped
+
+- **WHEN** a message body longer than the stored-text cap arrives
+- **THEN** the message is recorded with its text truncated at the cap and a visible truncation marker, and delivery to `receive_message` / the channel forwarder carries the full, untruncated text as today
 
 #### Scenario: Restart clears the buffer
 
 - **WHEN** the server process restarts and a thread surface is read before any new traffic arrives
 - **THEN** the surface renders the empty state and no historical data is loaded from disk
+
+### Requirement: Per-Instance History Divergence
+
+The buffer is instance-local by design. Each server process SHALL maintain its own private buffer covering only envelopes observed on its own daemon connection during its own lifetime, plus sends issued through its own tools. The server MUST NOT synchronize buffers across instances or share them through external storage. Concurrent instances (e.g. several channel-mode sessions against the same daemon) will therefore hold divergent histories — different process start times, and outbound sends recorded only by the instance that issued them. This divergence is accepted per ADR-0001 and MUST be disclosed on every surface (see the scope-disclosure clauses of the thread and index resource requirements) rather than hidden; the phone remains the only complete record.
+
+#### Scenario: Concurrent instances render independent views
+
+- **WHEN** two server instances run concurrently against the same daemon and one of them sends a message through its own send tools
+- **THEN** only the sending instance's surfaces show that outbound message, and each instance's surfaces reflect only the traffic observed during its own lifetime
 
 ### Requirement: Trusted-Sender Gating of Buffered Content
 
@@ -77,7 +102,8 @@ The server SHALL register an MCP resource template serving a chat-thread surface
 - `{id}` SHALL be percent-decoded before lookup and accepts either an E.164 number or a Signal group id (group ids are base64 and can contain `/` and `=`, so callers MUST percent-encode them).
 - The surface SHALL render the conversation's buffered messages oldest-first (newest last), each as a chat bubble carrying: sender display name (profile/contact name when known, else the number), a human-readable timestamp, the message text, one annotation line per attachment (filename or id, content type, human-readable size), and any attached reactions.
 - Messages authored by the server's own account SHALL be visually distinguished from the counterparty's (e.g. an "agent" alignment or label), so the thread reads as a two-sided chat.
-- Reading the resource for an unknown or empty conversation SHALL return a valid surface with an honest empty state (e.g. "No buffered messages for this conversation — history is process-lifetime only"), not a protocol error.
+- Every thread surface SHALL carry a scope disclosure: a caption stating that the view is this server instance's in-memory view since the process started, with the process start time (e.g. "This instance's view since 2026-08-12 14:02 UTC · 34 buffered messages · the phone is the complete record").
+- Reading the resource for an unknown or empty conversation SHALL return a valid surface with an honest empty state (e.g. "No buffered messages for this conversation — history is in-memory and instance-local"), not a protocol error.
 - Reading the resource MUST NOT mutate any state: no read receipts, no queue consumption, no sends.
 
 #### Scenario: Thread renders as a chat surface
@@ -90,6 +116,11 @@ The server SHALL register an MCP resource template serving a chat-thread surface
 - **WHEN** the host reads the thread resource for an id with no buffered messages
 - **THEN** the read succeeds and the surface shows the empty-state text
 
+#### Scenario: Scope disclosure is always present
+
+- **WHEN** any thread surface renders, whether populated or empty
+- **THEN** it includes the instance-local scope caption carrying the process start time
+
 #### Scenario: Group id round-trips through percent-encoding
 
 - **WHEN** the host reads the thread resource for a group whose id contains `/` or `=`, percent-encoded in the URI
@@ -100,6 +131,7 @@ The server SHALL register an MCP resource template serving a chat-thread surface
 The server SHALL register an MCP resource serving an index of buffered conversations, dual-registered as `signal://conversations/a2ui` and `mcp://signal/conversations/a2ui`, with MIME type `application/a2ui+json` and audience annotation `["user"]`.
 
 - The index SHALL list each buffered conversation with: a label (group name or id for groups, sender display name or number for direct messages), a preview of the most recent message, the buffered message count, and the last-activity time, ordered most-recently-active first.
+- The index SHALL carry the same instance-local scope disclosure as thread surfaces (in-memory view since process start).
 - An empty buffer SHALL render an honest empty-state surface, not a protocol error.
 
 #### Scenario: Index lists active conversations
