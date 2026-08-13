@@ -74,6 +74,13 @@ class SignalConfig:
     attachment_transfer: str = "auto"
     # Largest local file (in bytes) that may be encoded as a data URI.
     attachment_max_bytes: int = DEFAULT_ATTACHMENT_MAX_BYTES
+    # History buffer caps (A2UI chat surfaces, SPEC-0001).
+    # Per-conversation message cap (FIFO eviction).
+    history_message_cap: int = 200
+    # Total conversation cap (LRU eviction of least-recently-active).
+    history_conversation_cap: int = 50
+    # Per-message stored-text cap in bytes (truncation with marker).
+    history_text_cap: int = 4096
 
 
 # Global config instance shared by all modules.
@@ -285,6 +292,34 @@ def parse_args(argv: list[str] | None = None) -> SignalConfig:
         "(default: INFO, env: SIGNAL_MCP_LOG_LEVEL)",
     )
 
+    # History buffer caps (A2UI chat surfaces, SPEC-0001).
+    history_group = parser.add_argument_group(
+        "History buffer",
+        "Caps for the in-memory conversation buffer backing A2UI chat surfaces. "
+        "All eviction and truncation is silent and never affects message delivery.",
+    )
+    history_group.add_argument(
+        "--history-message-cap",
+        type=int,
+        default=int(os.environ.get("SIGNAL_MCP_HISTORY_MESSAGE_CAP", "200")),
+        help="Maximum messages buffered per conversation (FIFO eviction). "
+        "(default: 200, env: SIGNAL_MCP_HISTORY_MESSAGE_CAP)",
+    )
+    history_group.add_argument(
+        "--history-conversation-cap",
+        type=int,
+        default=int(os.environ.get("SIGNAL_MCP_HISTORY_CONVERSATION_CAP", "50")),
+        help="Maximum conversations buffered (LRU eviction). "
+        "(default: 50, env: SIGNAL_MCP_HISTORY_CONVERSATION_CAP)",
+    )
+    history_group.add_argument(
+        "--history-text-cap",
+        type=int,
+        default=int(os.environ.get("SIGNAL_MCP_HISTORY_TEXT_CAP", "4096")),
+        help="Maximum stored text bytes per message (truncation with marker). "
+        "(default: 4096, env: SIGNAL_MCP_HISTORY_TEXT_CAP)",
+    )
+
     # S3-compatible attachment storage (self-contained block; issue #20).
     # Credentials are resolved exclusively via the standard AWS chain
     # (AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY env vars, shared config files,
@@ -387,6 +422,9 @@ def parse_args(argv: list[str] | None = None) -> SignalConfig:
     config.attachments_dir = os.path.expanduser(args.attachments_dir)
     config.attachment_transfer = args.attachment_transfer
     config.attachment_max_bytes = args.attachment_max_bytes
+    config.history_message_cap = args.history_message_cap
+    config.history_conversation_cap = args.history_conversation_cap
+    config.history_text_cap = args.history_text_cap
 
     # Tri-state path-style: flag/env win when given; otherwise default to
     # path-style whenever a custom endpoint is configured (Garage and MinIO
