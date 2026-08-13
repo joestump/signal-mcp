@@ -161,9 +161,10 @@ class ConversationBuffer:
     - **Per-conversation cap (FIFO)**: each deque has ``maxlen`` set to
       ``config.history_message_cap``, so overflow evicts the oldest message
       automatically.
-    - **Conversation cap (LRU)**: after inserting a new key, conversations
+    - **Conversation cap (LRU)**: before inserting a new key, conversations
       beyond ``config.history_conversation_cap`` are evicted
-      least-recently-active first (``OrderedDict.popitem(last=False)``).
+      least-recently-active first (``OrderedDict.popitem(last=False)``), so
+      the conversation being recorded is never the one evicted.
     - **Text cap**: stored text is truncated at ``config.history_text_cap``
       bytes with a visible truncation marker.
 
@@ -257,6 +258,93 @@ class ConversationBuffer:
     def conversation_keys(self) -> list[str]:
         """Return all buffered conversation keys, most-recently-active last."""
         return list(self._conversations.keys())
+
+    def record_reaction(
+        self,
+        *,
+        conversation_key: str,
+        emoji: str | None,
+        author: str | None,
+        author_name: str | None,
+        target_author: str | None,
+        target_timestamp: int | None,
+        is_remove: bool,
+        trusted_check: bool = True,
+    ) -> None:
+        """Attach a reaction to the buffered message it targets.
+
+        Looks up the message in *conversation_key* whose ``(sender_id,
+        timestamp)`` matches ``(target_author, target_timestamp)``. If no
+        match is found the call is a silent no-op — a reaction can
+        legitimately target a message that predates process start or has
+        been evicted.
+
+        On a match with ``is_remove=False``: **replace by author** — remove
+        any existing reaction from the same *author* on that message, then
+        append. One reaction per author per message (Signal's semantics),
+        so reaction growth is bounded by distinct reacting authors.
+
+        On a match with ``is_remove=True``: remove the matching
+        emoji-by-author from the target message's reactions. Removing
+        something not present is a no-op.
+
+        When *trusted_check* is True the reaction is dropped at record time
+        unless *author* passes :func:`is_trusted_sender` — the same trust
+        boundary as :func:`record_inbound`. An *author* of ``None`` is
+        checked like any other: it fails wherever gating is enabled.
+
+        Never raises.
+        """
+        try:
+            # The gate is applied unconditionally — an author of ``None`` must
+            # fail it, not skip it. ``is_trusted_sender`` normalizes ``None``
+            # to the empty string, which is in no allowlist and never equals
+            # the operator, so an anonymous reaction is denied wherever gating
+            # is on and passes only in ungated polling mode.
+            if trusted_check and not is_trusted_sender(author):
+                return
+
+            if emoji is None:
+                return
+
+            deque_ = self._conversations.get(conversation_key)
+            if deque_ is None:
+                return
+
+            # BufferedReaction.author is a plain str, so a missing author is
+            # stored as "". Normalize once and compare against that, or every
+            # author=None lookup misses its own stored record.
+            author_key = author or ""
+
+            for msg in deque_:
+                if msg.sender_id == target_author and msg.timestamp == target_timestamp:
+                    if is_remove:
+                        # Remove only the emoji this removal targets. Filtering
+                        # on author alone lets a stale remove (Signal sends
+                        # remove-old and add-new as separate envelopes, with no
+                        # ordering guarantee) delete a newer reaction that
+                        # arrived first.
+                        msg.reactions = [
+                            r
+                            for r in msg.reactions
+                            if not (r.author == author_key and r.emoji == emoji)
+                        ]
+                    else:
+                        # Replace by author: remove existing, then append.
+                        msg.reactions = [
+                            r for r in msg.reactions if r.author != author_key
+                        ]
+                        msg.reactions.append(
+                            BufferedReaction(
+                                emoji=emoji,
+                                author=author_key,
+                                author_name=author_name,
+                            )
+                        )
+                    return
+            # No match found — silent no-op.
+        except Exception:
+            logger.warning("History buffer: failed to record reaction", exc_info=True)
 
 
 # Module-level singleton for the tap stories to import.
