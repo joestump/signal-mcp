@@ -171,3 +171,84 @@ async def _call_index_handler() -> str:
     from signal_mcp.tools import conversations_surface
 
     return await conversations_surface()
+
+
+def test_thread_heading_matches_the_index_label():
+    """The thread heading names the conversation the way the index row does.
+
+    The handler passed the raw conversation key as the label, so a DM the
+    index listed as "Alice" opened onto a thread headed by her bare phone
+    number.
+    """
+    import asyncio
+
+    from signal_mcp.history import BufferedMessage
+
+    buf = ConversationBuffer()
+    buf.record(
+        BufferedMessage(
+            conversation_key="+123",
+            direction="inbound",
+            sender_id="+123",
+            sender_name="Alice",
+            text="hello",
+            timestamp=1000,
+        )
+    )
+    with (
+        patch("signal_mcp.tools.history_buffer", buf),
+        patch.object(config, "account", "+456"),
+    ):
+        index_label = buf.conversations()[0].label
+        env = json.loads(asyncio.run(_call_thread_handler("+123")))
+
+    heading = next(
+        c for c in env["updateComponents"]["components"] if c["id"] == "heading"
+    )
+    assert index_label == "Alice"
+    assert heading["text"] == "Alice"
+
+
+def test_group_thread_heading_falls_back_to_the_group_id():
+    """A group has no contact name, so the key remains the heading."""
+    import asyncio
+
+    from signal_mcp.history import BufferedMessage
+
+    buf = ConversationBuffer()
+    buf.record(
+        BufferedMessage(
+            conversation_key="GID==",
+            direction="inbound",
+            sender_id="+123",
+            sender_name="Alice",
+            text="team update",
+            timestamp=1000,
+        )
+    )
+    with (
+        patch("signal_mcp.tools.history_buffer", buf),
+        patch.object(config, "account", "+456"),
+    ):
+        env = json.loads(asyncio.run(_call_thread_handler("GID%3D%3D")))
+
+    heading = next(
+        c for c in env["updateComponents"]["components"] if c["id"] == "heading"
+    )
+    assert heading["text"] == "GID=="
+
+
+def test_unknown_conversation_heading_falls_back_to_the_key():
+    """An id with nothing buffered still gets a heading, not an exception."""
+    import asyncio
+
+    with (
+        patch("signal_mcp.tools.history_buffer", ConversationBuffer()),
+        patch.object(config, "account", "+456"),
+    ):
+        env = json.loads(asyncio.run(_call_thread_handler("+999")))
+
+    heading = next(
+        c for c in env["updateComponents"]["components"] if c["id"] == "heading"
+    )
+    assert heading["text"] == "+999"

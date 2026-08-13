@@ -59,6 +59,20 @@ register_prompts(mcp)
 # ---------------------------------------------------------------------------
 
 
+def _conversation_label(key: str) -> str:
+    """The display label the index surface uses for *key*, else the key itself.
+
+    The buffer already resolves a DM's counterparty to a contact name, so
+    asking it here keeps the thread heading and the index row naming the same
+    conversation the same way. Falls back to the raw key for a conversation
+    that has no buffered messages (nothing to derive a name from).
+    """
+    for summary in history_buffer.conversations():
+        if summary.key == key:
+            return summary.label
+    return key
+
+
 @mcp.resource(
     "signal://conversation/{id}/a2ui",
     mime_type="application/a2ui+json",
@@ -76,7 +90,7 @@ async def thread_surface(id: str) -> str:
         messages = history_buffer.snapshot(decoded)
         env = a2ui.render_thread(
             conversation_id=decoded,
-            label=decoded,
+            label=_conversation_label(decoded),
             messages=messages,
             account=config.account,
         )
