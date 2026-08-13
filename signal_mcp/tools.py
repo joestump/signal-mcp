@@ -23,6 +23,11 @@ from mcp.server.fastmcp import FastMCP
 
 from signal_mcp import s3
 from signal_mcp.config import _normalize_recipient, config, is_trusted_sender
+from signal_mcp.history import (
+    BufferedMessage,
+    buffer as history_buffer,
+    conversation_key,
+)
 from signal_mcp.parse import MessageResponse
 from signal_mcp.prompts import register_prompts
 from signal_mcp.rpc import (
@@ -475,8 +480,33 @@ async def _send_message(
     else:
         params["recipient"] = [target]
 
-    await get_client().call("send", params)
+    result = await get_client().call("send", params)
     logger.info(f"Sent message to {target_type}: {target}")
+
+    # Record into the history buffer after RPC success.
+    ts = result.get("timestamp") if isinstance(result, dict) else None
+    try:
+        key = conversation_key(
+            group_id=target if is_group else None,
+            sender_id=config.account,
+            destination=target if not is_group else None,
+            account=config.account,
+        )
+        if key is not None:
+            history_buffer.record(
+                BufferedMessage(
+                    conversation_key=key,
+                    direction="outbound",
+                    sender_id=config.account,
+                    sender_name=None,
+                    text=message,
+                    timestamp=ts,
+                )
+            )
+    except Exception:  # noqa: BLE001
+        logger.warning(
+            "Failed to record outbound message in history buffer", exc_info=True
+        )
 
 
 async def _send_reaction(
@@ -508,6 +538,30 @@ async def _send_reaction(
     await get_client().call("sendReaction", params)
     action = "Removed" if remove else "Sent"
     logger.info(f"{action} reaction {emoji!r} to {target_type}: {target}")
+
+    # Record the reaction into the history buffer after RPC success.
+    try:
+        key = conversation_key(
+            group_id=target if is_group else None,
+            sender_id=config.account,
+            destination=target if not is_group else None,
+            account=config.account,
+        )
+        if key is not None:
+            history_buffer.record_reaction(
+                conversation_key=key,
+                emoji=emoji,
+                author=config.account,
+                author_name=None,
+                target_author=target_author,
+                target_timestamp=target_timestamp,
+                is_remove=remove,
+                trusted_check=False,
+            )
+    except Exception:  # noqa: BLE001
+        logger.warning(
+            "Failed to record outbound reaction in history buffer", exc_info=True
+        )
 
 
 @mcp.tool()
