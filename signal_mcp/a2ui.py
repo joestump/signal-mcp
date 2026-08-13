@@ -15,7 +15,7 @@ import json
 from datetime import UTC, datetime
 from typing import Any
 
-from signal_mcp.history import BufferedMessage, started_at
+from signal_mcp.history import BufferedMessage, ConversationSummary, started_at
 
 
 class A2UIValidationError(Exception):
@@ -408,5 +408,93 @@ def render_thread(
 
     return build_envelope(
         surface_id=f"thread-{conversation_id}",
+        components=components,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Index renderer
+# ---------------------------------------------------------------------------
+
+
+def render_index(
+    *,
+    summaries: list[ConversationSummary],
+    started_at_dt: datetime | None = None,
+) -> dict[str, Any]:
+    """Render the conversation index surface from buffer summaries.
+
+    *summaries* is the list returned by
+    :meth:`~signal_mcp.history.ConversationBuffer.conversations`,
+    already ordered most-recently-active first — do not re-sort.
+
+    Returns a validated v0.9 envelope. An empty *summaries* list renders
+    an honest empty-state surface, never an exception.
+    """
+    scope_start = started_at() if started_at_dt is None else started_at_dt
+
+    if not summaries:
+        empty_components = [
+            card("root", "col"),
+            column("col", ["heading", "scope", "divider", "empty"]),
+            heading("heading", "Conversations"),
+            caption("scope", _format_scope_caption(0, scope_start)),
+            divider("divider"),
+            text(
+                "empty",
+                "No buffered conversations "
+                "\u2014 history is in-memory and instance-local",
+            ),
+        ]
+        return build_envelope(
+            surface_id="index",
+            components=empty_components,
+        )
+
+    alloc = IdAllocator()
+    row_ids: list[str] = []
+    components: list[dict[str, Any]] = [
+        card("root", "col"),
+        column("col", ["heading", "scope", "divider"]),
+        heading("heading", "Conversations"),
+        caption(
+            "scope",
+            _format_scope_caption(sum(s.message_count for s in summaries), scope_start),
+        ),
+        divider("divider"),
+    ]
+
+    for s in summaries:
+        row_id = alloc.next("conv-row")
+        label_id = alloc.next("conv-label")
+        preview_id = alloc.next("conv-preview")
+        meta_id = alloc.next("conv-meta")
+        row_ids.append(row_id)
+
+        meta_parts: list[str] = []
+        meta_parts.append(
+            f"{s.message_count} message" + ("s" if s.message_count != 1 else "")
+        )
+        # _format_timestamp returns "" for a value it cannot interpret (the
+        # timestamp is sender-controlled), so test the formatted result rather
+        # than the raw field, or the meta line ends in a dangling separator.
+        formatted_activity = _format_timestamp(s.last_activity)
+        if formatted_activity:
+            meta_parts.append(formatted_activity)
+
+        components.extend(
+            [
+                row(row_id, [label_id, preview_id, meta_id]),
+                text(label_id, s.label),
+                caption(preview_id, s.preview or "(no preview)"),
+                caption(meta_id, " \u00b7 ".join(meta_parts)),
+            ]
+        )
+
+    components[1]["children"].append("conv-list")
+    components.append(list_("conv-list", row_ids))
+
+    return build_envelope(
+        surface_id="index",
         components=components,
     )
