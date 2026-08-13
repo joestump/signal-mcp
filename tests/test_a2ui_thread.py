@@ -4,7 +4,12 @@ import json
 from datetime import datetime, timezone
 from unittest.mock import patch
 
-from signal_mcp.a2ui import render_thread, A2UI_VERSION, CATALOG_ID
+from signal_mcp.a2ui import (
+    A2UI_VERSION,
+    CATALOG_ID,
+    render_thread,
+    validate_adjacency,
+)
 from signal_mcp.history import (
     BufferedAttachment,
     BufferedMessage,
@@ -77,7 +82,7 @@ def test_render_populated_thread():
     assert "hello back" in comp_str
     assert "Bob" in comp_str
     assert "(agent)" in comp_str
-    assert "1000" not in comp_str  # raw epoch not shown
+    assert "1970-01-01 00:00 UTC" in comp_str  # formatted, not raw epoch
 
 
 def test_scope_caption_always_present():
@@ -322,3 +327,174 @@ def test_non_numeric_attachment_size_renders_unknown():
     assert any(
         c.get("text") == "photo.png (image/png, unknown size)" for c in components
     )
+
+
+# ---------------------------------------------------------------------------
+# Action buttons (#64)
+# ---------------------------------------------------------------------------
+
+GROUP_ID = "aGVsbG8="
+
+
+def test_react_button_carries_action_context():
+    """The react button's context contains conversation_id, target_author, and target_timestamp."""
+    messages = [_msg(text="hello", timestamp=1000, sender_id=OTHER)]
+    with patch("signal_mcp.a2ui.started_at", return_value=FIXED_TIME):
+        env = render_thread(
+            conversation_id=OTHER,
+            label="Bob",
+            messages=messages,
+            account=ACCOUNT,
+        )
+    components = env["updateComponents"]["components"]
+    react_buttons = [c for c in components if c.get("actionName") == "react"]
+    assert len(react_buttons) == 1
+    ctx = react_buttons[0]["context"]
+    assert ctx["conversation_id"] == OTHER
+    assert ctx["target_author"] == OTHER
+    assert ctx["target_timestamp"] == 1000
+
+
+def test_react_button_context_for_group():
+    """The react button context for a group conversation carries the group id."""
+    group_msg = BufferedMessage(
+        conversation_key=GROUP_ID,
+        direction="inbound",
+        sender_id=OTHER,
+        sender_name="Bob",
+        text="group hi",
+        timestamp=2000,
+    )
+    with patch("signal_mcp.a2ui.started_at", return_value=FIXED_TIME):
+        env = render_thread(
+            conversation_id=GROUP_ID,
+            label="Team",
+            messages=[group_msg],
+            account=ACCOUNT,
+        )
+    components = env["updateComponents"]["components"]
+    react_buttons = [c for c in components if c.get("actionName") == "react"]
+    assert len(react_buttons) == 1
+    ctx = react_buttons[0]["context"]
+    assert ctx["conversation_id"] == GROUP_ID
+    assert ctx["target_author"] == OTHER
+    assert ctx["target_timestamp"] == 2000
+
+
+def test_every_button_has_text_label():
+    """Every Button in a rendered surface has a non-empty text label."""
+    messages = [_msg(text="hello", timestamp=1000)]
+    with patch("signal_mcp.a2ui.started_at", return_value=FIXED_TIME):
+        env = render_thread(
+            conversation_id=OTHER,
+            label="Bob",
+            messages=messages,
+            account=ACCOUNT,
+        )
+    components = env["updateComponents"]["components"]
+    buttons = [c for c in components if c.get("component") == "Button"]
+    assert len(buttons) >= 2  # reply + react
+    for btn in buttons:
+        label = btn.get("label", "")
+        assert isinstance(label, str) and len(label) > 0, btn
+
+
+def test_reply_button_exists():
+    """A reply button is present on every message bubble."""
+    messages = [_msg(text="hello", timestamp=1000)]
+    with patch("signal_mcp.a2ui.started_at", return_value=FIXED_TIME):
+        env = render_thread(
+            conversation_id=OTHER,
+            label="Bob",
+            messages=messages,
+            account=ACCOUNT,
+        )
+    components = env["updateComponents"]["components"]
+    reply_buttons = [c for c in components if c.get("actionName") == "reply"]
+    assert len(reply_buttons) == 1
+
+
+# ---------------------------------------------------------------------------
+# Action button context (#64)
+# ---------------------------------------------------------------------------
+
+
+def _buttons(env: dict, action: str) -> list[dict]:
+    return [
+        c
+        for c in env["updateComponents"]["components"]
+        if c.get("actionName") == action
+    ]
+
+
+def test_reply_button_carries_conversation_context():
+    """Reply must say which conversation it belongs to.
+
+    It previously carried an action name and nothing else, leaving every
+    Reply button in the surface byte-identical apart from its id — a phase-2
+    handler had no way to route the reply.
+    """
+    env = render_thread(
+        conversation_id=OTHER,
+        label="Bob",
+        messages=[_msg(text="hi"), _msg(text="there", timestamp=2000)],
+        account=ACCOUNT,
+        started_at_dt=FIXED_TIME,
+    )
+    replies = _buttons(env, "reply")
+    assert len(replies) == 2
+    for btn in replies:
+        assert btn["context"]["conversation_id"] == OTHER
+
+
+def test_react_button_omitted_without_a_usable_target():
+    """No React button when the message has no (author, timestamp) to target.
+
+    record_outbound stores timestamp=None whenever the daemon omits one, and
+    a reaction against timestamp 0 / author "" matches nothing on the phone.
+    """
+    msg = _msg(text="sent")
+    msg.timestamp = None
+    env = render_thread(
+        conversation_id=OTHER,
+        label="Bob",
+        messages=[msg],
+        account=ACCOUNT,
+        started_at_dt=FIXED_TIME,
+    )
+    assert _buttons(env, "react") == []
+    # Reply is still offered — it needs no target.
+    assert len(_buttons(env, "reply")) == 1
+    # And the surface is still structurally valid with the button missing.
+    validate_adjacency(env["updateComponents"]["components"])
+
+
+def test_react_button_omitted_without_a_sender():
+    """An author-less message cannot be reacted to either."""
+    msg = _msg(text="sent")
+    msg.sender_id = None
+    env = render_thread(
+        conversation_id=OTHER,
+        label="Bob",
+        messages=[msg],
+        account=ACCOUNT,
+        started_at_dt=FIXED_TIME,
+    )
+    assert _buttons(env, "react") == []
+    validate_adjacency(env["updateComponents"]["components"])
+
+
+def test_react_context_is_never_a_placeholder_target():
+    """A rendered React button always names a real, actionable target."""
+    env = render_thread(
+        conversation_id=OTHER,
+        label="Bob",
+        messages=[_msg(text="hi", timestamp=1000)],
+        account=ACCOUNT,
+        started_at_dt=FIXED_TIME,
+    )
+    ctx = _buttons(env, "react")[0]["context"]
+    assert ctx["target_author"] == OTHER
+    assert ctx["target_timestamp"] == 1000
+    assert ctx["target_timestamp"] != 0
+    assert ctx["target_author"] != ""
