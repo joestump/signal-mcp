@@ -5,6 +5,7 @@ import base64
 import contextlib
 import functools
 import ipaddress
+import json
 import logging
 import mimetypes
 import os
@@ -20,8 +21,9 @@ from typing import Any, ParamSpec, TypeVar
 from urllib.parse import quote, unquote, urlsplit
 
 from mcp.server.fastmcp import FastMCP
+from mcp.types import Annotations
 
-from signal_mcp import s3
+from signal_mcp import a2ui, s3
 from signal_mcp.config import _normalize_recipient, config, is_trusted_sender
 from signal_mcp.history import (
     BufferedAttachment,
@@ -44,6 +46,64 @@ logger = logging.getLogger(__name__)
 # The MCP server instance all tools register against.
 mcp = FastMCP(name="signal-cli")
 register_prompts(mcp)
+
+# ---------------------------------------------------------------------------
+# A2UI resource registrations (SPEC-0001)
+#
+# Four resources against two handlers, dual-registered under signal:// and
+# mcp:// schemes. Each declares MIME application/a2ui+json and
+# audience: ["user"] — the model keeps the existing JSON tools, the human
+# gets rendered surfaces. Handlers take a synchronous snapshot from the
+# buffer and render; they never call the daemon, which makes "reading MUST
+# NOT mutate state" trivially true.
+# ---------------------------------------------------------------------------
+
+
+@mcp.resource(
+    "signal://conversation/{id}/a2ui",
+    mime_type="application/a2ui+json",
+    annotations=Annotations(audience=["user"]),
+)
+@mcp.resource(
+    "mcp://signal/conversation/{id}/a2ui",
+    mime_type="application/a2ui+json",
+    annotations=Annotations(audience=["user"]),
+)
+async def thread_surface(id: str) -> str:
+    """Render a chat-thread surface for one conversation."""
+    decoded = unquote(id)
+    try:
+        messages = history_buffer.snapshot(decoded)
+        env = a2ui.render_thread(
+            conversation_id=decoded,
+            label=decoded,
+            messages=messages,
+            account=config.account,
+        )
+        return json.dumps(env)
+    except Exception as e:
+        raise SignalError(f"failed to render thread surface: {e}") from e
+
+
+@mcp.resource(
+    "signal://conversations/a2ui",
+    mime_type="application/a2ui+json",
+    annotations=Annotations(audience=["user"]),
+)
+@mcp.resource(
+    "mcp://signal/conversations/a2ui",
+    mime_type="application/a2ui+json",
+    annotations=Annotations(audience=["user"]),
+)
+async def conversations_surface() -> str:
+    """Render the conversation index surface."""
+    try:
+        summaries = history_buffer.conversations()
+        env = a2ui.render_index(summaries=summaries)
+        return json.dumps(env)
+    except Exception as e:
+        raise SignalError(f"failed to render index surface: {e}") from e
+
 
 P = ParamSpec("P")
 T = TypeVar("T")
