@@ -1,7 +1,10 @@
 """Pure A2UI v0.9 envelope builders for chat-surface rendering.
 
-This module is **pure data-in / JSON-out** — no buffer access, no MCP, no I/O.
-That purity is what makes golden-file tests able to pin the contract exactly.
+This module is **data-in / JSON-out** — no MCP, no I/O, and no reads from the
+buffer: it renders the snapshot it is handed and nothing else. The one piece
+of ambient state it consults, the process start time in the scope caption, is
+injectable via ``render_thread(started_at_dt=...)``. That is what makes
+golden-file tests able to pin the contract exactly.
 
 The two module constants (``A2UI_VERSION`` and ``CATALOG_ID``) are the single
 coordination point with the host renderer: bumping them is a coordinated
@@ -245,10 +248,21 @@ _SIZE_UNITS = ("B", "KB", "MB", "GB", "TB")
 
 
 def _format_size(size: int | None) -> str:
-    """Format a byte count human-readably (e.g. ``1.4 MB``)."""
+    """Format a byte count human-readably (e.g. ``1.4 MB``).
+
+    ``size`` reaches here straight from the sender's ``attachments[].size``
+    field, so it is not necessarily a number. An uninterpretable value
+    degrades to ``"unknown size"`` rather than taking the whole surface down
+    with it.
+    """
     if size is None:
         return "unknown size"
-    value = float(size)
+    try:
+        value = float(size)
+    except (TypeError, ValueError):
+        return "unknown size"
+    if value != value or value in (float("inf"), float("-inf")):  # NaN / inf
+        return "unknown size"
     index = 0
     while value >= 1024 and index < len(_SIZE_UNITS) - 1:
         value /= 1024
@@ -258,16 +272,24 @@ def _format_size(size: int | None) -> str:
 
 
 def _format_timestamp(ts: int | None) -> str:
-    """Render a millisecond epoch as ``YYYY-MM-DD HH:MM UTC``."""
+    """Render a millisecond epoch as ``YYYY-MM-DD HH:MM UTC``.
+
+    The timestamp originates in the sender's own ``dataMessage.timestamp`` and
+    is stored unvalidated, so it can be out of ``datetime``'s range or not a
+    number at all. One hostile message must not make an entire conversation
+    un-renderable, so an uninterpretable value renders blank.
+    """
     if ts is None:
         return ""
-    dt = datetime.fromtimestamp(ts / 1000, tz=UTC)
+    try:
+        dt = datetime.fromtimestamp(ts / 1000, tz=UTC)
+    except (TypeError, ValueError, OverflowError, OSError):
+        return ""
     return dt.strftime("%Y-%m-%d %H:%M UTC")
 
 
-def _format_scope_caption(message_count: int) -> str:
+def _format_scope_caption(message_count: int, started: datetime) -> str:
     """Build the instance-local scope disclosure caption."""
-    started = started_at()
     started_str = started.strftime("%Y-%m-%d %H:%M UTC")
     plural = "messages" if message_count != 1 else "message"
     return (
@@ -298,18 +320,15 @@ def render_thread(
     *messages* is a point-in-time snapshot (plain list) of a conversation's
     buffered messages, oldest first. *account* is the server's own number —
     messages authored by it are visually distinguished. *started_at_dt*
-    overrides the process start time (used by tests).
+    overrides the process start time reported in the scope caption (used by
+    tests); it defaults to :func:`~signal_mcp.history.started_at`.
 
     Returns a validated v0.9 envelope. An empty *messages* list renders an
-    honest empty-state surface, never an exception.
+    honest empty-state surface, never an exception. Sender-controlled
+    timestamps and attachment sizes are formatted defensively, so a single
+    malformed message degrades its own line rather than the whole surface.
     """
-    if started_at_dt is not None:
-        global_scope = started_at_dt
-    else:
-        global_scope = started_at()
-    # global_scope is available for scope-caption formatting overrides
-    # in future extensions; currently _format_scope_caption uses started_at().
-    _ = global_scope
+    scope_start = started_at() if started_at_dt is None else started_at_dt
 
     alloc = IdAllocator()
 
@@ -318,7 +337,7 @@ def render_thread(
             card("root", "col"),
             column("col", ["heading", "scope", "divider", "empty"]),
             heading("heading", label),
-            caption("scope", _format_scope_caption(0)),
+            caption("scope", _format_scope_caption(0, scope_start)),
             divider("divider"),
             text(
                 "empty",
@@ -337,7 +356,7 @@ def render_thread(
         card("root", "col"),
         column("col", ["heading", "scope", "divider"]),
         heading("heading", label),
-        caption("scope", _format_scope_caption(len(messages))),
+        caption("scope", _format_scope_caption(len(messages), scope_start)),
         divider("divider"),
     ]
 

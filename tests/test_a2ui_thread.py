@@ -223,3 +223,102 @@ def test_timestamps_human_readable():
     comp_str = json.dumps(env)
     assert "2024" in comp_str or "2026" in comp_str  # some year
     assert "UTC" in comp_str
+
+
+# ---------------------------------------------------------------------------
+# started_at_dt override — the documented parameter must actually be used
+# ---------------------------------------------------------------------------
+
+
+def _scope_text(env: dict) -> str:
+    components = env["updateComponents"]["components"]
+    return next(c["text"] for c in components if c["id"] == "scope")
+
+
+def test_started_at_override_is_used():
+    """started_at_dt overrides the process start time in the scope caption.
+
+    The parameter used to be assigned to a local and discarded, so the caption
+    always reported the real process start time no matter what a caller passed.
+    """
+    override = datetime(1999, 12, 31, 23, 58, tzinfo=timezone.utc)
+    env = render_thread(
+        conversation_id="c1",
+        label="Alice",
+        messages=[_msg(text="hi")],
+        account=ACCOUNT,
+        started_at_dt=override,
+    )
+    assert "1999-12-31 23:58 UTC" in _scope_text(env)
+
+
+def test_started_at_override_is_used_on_empty_surface():
+    """The empty-state surface honours the override too."""
+    override = datetime(1999, 12, 31, 23, 58, tzinfo=timezone.utc)
+    env = render_thread(
+        conversation_id="c1",
+        label="Alice",
+        messages=[],
+        account=ACCOUNT,
+        started_at_dt=override,
+    )
+    assert "1999-12-31 23:58 UTC" in _scope_text(env)
+
+
+# ---------------------------------------------------------------------------
+# Hostile field values degrade their own line, not the whole surface
+# ---------------------------------------------------------------------------
+
+
+def test_out_of_range_timestamp_does_not_break_the_surface():
+    """A sender-supplied timestamp outside datetime's range renders blank."""
+    env = render_thread(
+        conversation_id="c1",
+        label="Alice",
+        messages=[_msg(text="hi", timestamp=10**20)],
+        account=ACCOUNT,
+        started_at_dt=FIXED_TIME,
+    )
+    components = env["updateComponents"]["components"]
+    assert any(c["id"] == "msg-time-0" and c["text"] == "" for c in components)
+    # The message body still rendered.
+    assert any(c.get("text") == "hi" for c in components)
+
+
+def test_non_numeric_timestamp_does_not_break_the_surface():
+    """A non-numeric timestamp renders blank instead of raising TypeError."""
+    msg = _msg(text="hi")
+    msg.timestamp = "not-a-number"  # type: ignore[assignment]
+    env = render_thread(
+        conversation_id="c1",
+        label="Alice",
+        messages=[msg],
+        account=ACCOUNT,
+        started_at_dt=FIXED_TIME,
+    )
+    components = env["updateComponents"]["components"]
+    assert any(c["id"] == "msg-time-0" and c["text"] == "" for c in components)
+
+
+def test_non_numeric_attachment_size_renders_unknown():
+    """A non-numeric attachments[].size degrades to 'unknown size'."""
+    msg = _msg(text="")
+    msg.attachments = [
+        BufferedAttachment(
+            id="a1",
+            filename="photo.png",
+            content_type="image/png",
+            size="huge",  # type: ignore[arg-type]
+        )
+    ]
+    env = render_thread(
+        conversation_id="c1",
+        label="Alice",
+        messages=[msg],
+        account=ACCOUNT,
+        started_at_dt=FIXED_TIME,
+    )
+    components = env["updateComponents"]["components"]
+    assert any(
+        c.get("text") == "photo.png (image/png, unknown size)" for c in components
+    )
