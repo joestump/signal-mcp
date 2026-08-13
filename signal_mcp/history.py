@@ -10,6 +10,7 @@ See ADR-0001 and SPEC-0001 REQ "Per-Instance History Divergence".
 import collections
 import logging
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Literal
 
 from signal_mcp.config import config, is_trusted_sender
@@ -345,6 +346,78 @@ class ConversationBuffer:
             # No match found — silent no-op.
         except Exception:
             logger.warning("History buffer: failed to record reaction", exc_info=True)
+
+    def conversations(self) -> list["ConversationSummary"]:
+        """Return a summary per buffered conversation, most-recently-active first.
+
+        Each summary carries a label, preview, count, and last-activity
+        timestamp. The list is ordered most-recently-active first (the
+        reverse of the OrderedDict's insertion/LRU order).
+
+        The server MUST NOT synchronize buffers across instances or share
+        them through external storage (SPEC-0001 REQ "Per-Instance History
+        Divergence").
+        """
+        summaries: list[ConversationSummary] = []
+        for key in reversed(self._conversations):
+            deque_ = self._conversations[key]
+            if not deque_:
+                continue
+            messages = list(deque_)
+            newest = messages[-1]
+            preview = newest.text or ""
+            if not preview and newest.attachments:
+                att = newest.attachments[0]
+                preview = att.filename or att.id or "attachment"
+            # Collapse to a single line and clip.
+            preview = preview.replace("\n", " ").strip()
+            if len(preview) > 80:
+                preview = preview[:77] + "..."
+            # Substitute the sender's name for the key only in a DM, where the
+            # sender *is* the conversation (key == the counterparty's number).
+            # In a group the key is the group id and the newest sender is one
+            # member of many, so naming the thread after them would relabel the
+            # same conversation every time a different member posts.
+            label = key
+            if (
+                newest.sender_name
+                and newest.direction == "inbound"
+                and newest.sender_id == key
+            ):
+                label = newest.sender_name
+            summaries.append(
+                ConversationSummary(
+                    key=key,
+                    label=label,
+                    preview=preview,
+                    message_count=len(messages),
+                    last_activity=newest.timestamp,
+                )
+            )
+        return summaries
+
+
+@dataclass
+class ConversationSummary:
+    """Summary of one buffered conversation for the index surface."""
+
+    key: str
+    label: str
+    preview: str
+    message_count: int
+    last_activity: int | None
+
+
+# Process start time — captured once at module import. This is what every
+# surface's scope-disclosure caption renders: the view covers only this
+# process's lifetime, on its own daemon connection, plus its own outbound
+# sends. It is the honest expression of SPEC-0001's per-instance divergence.
+_PROCESS_START = datetime.now(timezone.utc)
+
+
+def started_at() -> datetime:
+    """Return this process's start time (when the module was imported)."""
+    return _PROCESS_START
 
 
 # Module-level singleton for the tap stories to import.
