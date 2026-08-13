@@ -222,3 +222,122 @@ def test_reaction_never_raises(caplog):
                 trusted_check=False,
             )
     assert any("failed to record reaction" in r.message for r in caplog.records)
+
+
+# ---------------------------------------------------------------------------
+# Trust gating — an anonymous author must fail the gate, not skip it
+# ---------------------------------------------------------------------------
+
+
+def test_reaction_anonymous_author_denied_by_allowlist():
+    """author=None does not bypass the allowlist.
+
+    The gate used to be guarded by ``author is not None``, so an envelope with
+    no source skipped the check entirely and attached to a trusted user's
+    message — a side channel around the deny-by-default gate.
+    """
+    buf = ConversationBuffer()
+    buf.record(_msg(timestamp=1000))
+    with patch.object(config, "trusted_senders", frozenset({OTHER_A, OTHER_B})):
+        buf.record_reaction(
+            conversation_key=OTHER_A,
+            emoji="\U0001f44d",
+            author=None,
+            author_name=None,
+            target_author=OTHER_A,
+            target_timestamp=1000,
+            is_remove=False,
+        )
+    assert buf.snapshot(OTHER_A)[0].reactions == []
+
+
+def test_reaction_anonymous_author_denied_in_channel_mode():
+    """Channel mode is deny-by-default, so an anonymous reaction is dropped."""
+    buf = ConversationBuffer()
+    buf.record(_msg(timestamp=1000))
+    with (
+        patch.object(config, "trusted_senders", frozenset()),
+        patch.object(config, "channel_mode", True),
+        patch.object(config, "operator", OTHER_A),
+    ):
+        buf.record_reaction(
+            conversation_key=OTHER_A,
+            emoji="\U0001f44d",
+            author=None,
+            author_name=None,
+            target_author=OTHER_A,
+            target_timestamp=1000,
+            is_remove=False,
+        )
+    assert buf.snapshot(OTHER_A)[0].reactions == []
+
+
+# ---------------------------------------------------------------------------
+# Removal targets a specific emoji, not "everything by this author"
+# ---------------------------------------------------------------------------
+
+
+def test_stale_remove_does_not_clear_newer_reaction():
+    """A remove for the old emoji must not delete a newer one that arrived first.
+
+    Signal sends remove-old and add-new as separate envelopes with no ordering
+    guarantee. Filtering on author alone let the late remove wipe the reaction
+    the user actually wants shown.
+    """
+    buf = ConversationBuffer()
+    buf.record(_msg(timestamp=1000))
+    # Alice switches from thumbs-up to heart; the add lands first.
+    buf.record_reaction(
+        conversation_key=OTHER_A,
+        emoji="\U0001f44d",
+        author=OTHER_B,
+        author_name="Bob",
+        target_author=OTHER_A,
+        target_timestamp=1000,
+        is_remove=False,
+        trusted_check=False,
+    )
+    buf.record_reaction(
+        conversation_key=OTHER_A,
+        emoji="❤️",
+        author=OTHER_B,
+        author_name="Bob",
+        target_author=OTHER_A,
+        target_timestamp=1000,
+        is_remove=False,
+        trusted_check=False,
+    )
+    # ...then the stale remove for the *old* emoji arrives.
+    buf.record_reaction(
+        conversation_key=OTHER_A,
+        emoji="\U0001f44d",
+        author=OTHER_B,
+        author_name="Bob",
+        target_author=OTHER_A,
+        target_timestamp=1000,
+        is_remove=True,
+        trusted_check=False,
+    )
+    reactions = buf.snapshot(OTHER_A)[0].reactions
+    assert len(reactions) == 1
+    assert reactions[0].emoji == "❤️"
+
+
+def test_anonymous_author_reaction_replaces_itself():
+    """In ungated polling mode an author=None reaction still replaces by author."""
+    buf = ConversationBuffer()
+    buf.record(_msg(timestamp=1000))
+    for emoji in ("\U0001f44d", "❤️"):
+        buf.record_reaction(
+            conversation_key=OTHER_A,
+            emoji=emoji,
+            author=None,
+            author_name=None,
+            target_author=OTHER_A,
+            target_timestamp=1000,
+            is_remove=False,
+            trusted_check=False,
+        )
+    reactions = buf.snapshot(OTHER_A)[0].reactions
+    assert len(reactions) == 1
+    assert reactions[0].emoji == "❤️"

@@ -287,16 +287,21 @@ class ConversationBuffer:
         emoji-by-author from the target message's reactions. Removing
         something not present is a no-op.
 
-        When *trusted_check* is True and *author* is not a trusted sender,
-        the reaction is dropped at record time — same trust boundary as
-        :func:`record_inbound`.
+        When *trusted_check* is True the reaction is dropped at record time
+        unless *author* passes :func:`is_trusted_sender` — the same trust
+        boundary as :func:`record_inbound`. An *author* of ``None`` is
+        checked like any other: it fails wherever gating is enabled.
 
         Never raises.
         """
         try:
-            if trusted_check and author is not None:
-                if not is_trusted_sender(author):
-                    return
+            # The gate is applied unconditionally — an author of ``None`` must
+            # fail it, not skip it. ``is_trusted_sender`` normalizes ``None``
+            # to the empty string, which is in no allowlist and never equals
+            # the operator, so an anonymous reaction is denied wherever gating
+            # is on and passes only in ungated polling mode.
+            if trusted_check and not is_trusted_sender(author):
+                return
 
             if emoji is None:
                 return
@@ -305,17 +310,33 @@ class ConversationBuffer:
             if deque_ is None:
                 return
 
+            # BufferedReaction.author is a plain str, so a missing author is
+            # stored as "". Normalize once and compare against that, or every
+            # author=None lookup misses its own stored record.
+            author_key = author or ""
+
             for msg in deque_:
                 if msg.sender_id == target_author and msg.timestamp == target_timestamp:
                     if is_remove:
-                        msg.reactions = [r for r in msg.reactions if r.author != author]
+                        # Remove only the emoji this removal targets. Filtering
+                        # on author alone lets a stale remove (Signal sends
+                        # remove-old and add-new as separate envelopes, with no
+                        # ordering guarantee) delete a newer reaction that
+                        # arrived first.
+                        msg.reactions = [
+                            r
+                            for r in msg.reactions
+                            if not (r.author == author_key and r.emoji == emoji)
+                        ]
                     else:
                         # Replace by author: remove existing, then append.
-                        msg.reactions = [r for r in msg.reactions if r.author != author]
+                        msg.reactions = [
+                            r for r in msg.reactions if r.author != author_key
+                        ]
                         msg.reactions.append(
                             BufferedReaction(
                                 emoji=emoji,
-                                author=author or "",
+                                author=author_key,
                                 author_name=author_name,
                             )
                         )
