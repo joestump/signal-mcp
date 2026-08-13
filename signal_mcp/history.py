@@ -438,7 +438,7 @@ def record_inbound(msg: "MessageResponse") -> None:
         key = conversation_key(
             group_id=msg.group_id,
             sender_id=msg.sender_id,
-            destination=getattr(msg, "destination", None),
+            destination=msg.destination,
             account=config.account,
         )
         if key is None:
@@ -528,7 +528,7 @@ def record_response(msg: "MessageResponse", *, account: str) -> None:
             key = conversation_key(
                 group_id=msg.group_id,
                 sender_id=msg.sender_id,
-                destination=getattr(msg, "destination", None),
+                destination=msg.destination,
                 account=account,
             )
             if key is None:
@@ -545,8 +545,8 @@ def record_response(msg: "MessageResponse", *, account: str) -> None:
             return
 
         # Sync-sent = the account sent this from the phone/another device.
-        if getattr(msg, "is_sync_sent", False):
-            dest = getattr(msg, "destination", None)
+        if msg.is_sync_sent:
+            dest = msg.destination
             key = conversation_key(
                 group_id=msg.group_id,
                 sender_id=account,
