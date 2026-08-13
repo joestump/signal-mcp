@@ -17,12 +17,18 @@ from collections.abc import AsyncIterator, Awaitable, Callable
 from email.message import EmailMessage
 from pathlib import Path
 from typing import Any, ParamSpec, TypeVar
-from urllib.parse import quote, urlsplit
+from urllib.parse import quote, unquote, urlsplit
 
 from mcp.server.fastmcp import FastMCP
 
 from signal_mcp import s3
 from signal_mcp.config import _normalize_recipient, config, is_trusted_sender
+from signal_mcp.history import (
+    BufferedAttachment,
+    buffer as history_buffer,
+    conversation_key,
+    record_outbound,
+)
 from signal_mcp.parse import MessageResponse
 from signal_mcp.prompts import register_prompts
 from signal_mcp.rpc import (
@@ -453,6 +459,62 @@ async def _prepared_attachments(
             shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
+def _buffered_attachments(entries: list[str] | None) -> list[BufferedAttachment]:
+    """Derive history-buffer metadata from daemon-ready attachment entries.
+
+    An entry is either a local file path or an RFC 2397 data URI built by
+    :func:`_encode_data_uri` (``data:<mime>;filename=<name>;base64,<data>``).
+    Only name, type, and size are extracted — the buffer is metadata-only, so
+    no bytes, paths, or URLs are kept (they outlive neither the temp files nor
+    the presigned URLs they came from).
+
+    Best-effort by construction: an entry that cannot be interpreted still
+    yields a record with whatever is known, so an attachment never silently
+    vanishes from the thread. Never raises — recording must not fail a send
+    that already succeeded.
+    """
+    records: list[BufferedAttachment] = []
+    for entry in entries or []:
+        try:
+            if entry.startswith("data:"):
+                header, _, payload = entry.partition(",")
+                params = header[len("data:") :].split(";")
+                mime = params[0] or None
+                filename: str | None = None
+                for param in params[1:]:
+                    if param.startswith("filename="):
+                        filename = unquote(param[len("filename=") :]) or None
+                # base64 encodes 3 bytes per 4 characters, minus padding.
+                size = max(0, len(payload) * 3 // 4 - payload.count("="))
+                records.append(
+                    BufferedAttachment(
+                        filename=filename,
+                        content_type=mime,
+                        size=size,
+                    )
+                )
+                continue
+
+            path = Path(entry)
+            file_size: int | None = None
+            with contextlib.suppress(OSError):
+                file_size = path.stat().st_size
+            records.append(
+                BufferedAttachment(
+                    filename=path.name or None,
+                    content_type=mimetypes.guess_type(path.name)[0],
+                    size=file_size,
+                )
+            )
+        except Exception:  # noqa: BLE001
+            logger.warning(
+                "Could not derive attachment metadata for the history buffer",
+                exc_info=True,
+            )
+            records.append(BufferedAttachment())
+    return records
+
+
 async def _send_message(
     message: str,
     target: str,
@@ -475,8 +537,20 @@ async def _send_message(
     else:
         params["recipient"] = [target]
 
-    await get_client().call("send", params)
+    result = await get_client().call("send", params)
     logger.info(f"Sent message to {target_type}: {target}")
+
+    # Record into the history buffer after RPC success. record_outbound owns
+    # the keying and never raises; the metadata is derived here because only
+    # this layer knows what the prepared entries are.
+    ts = result.get("timestamp") if isinstance(result, dict) else None
+    record_outbound(
+        text=message,
+        timestamp=ts,
+        target=target,
+        is_group=is_group,
+        attachments=_buffered_attachments(attachments),
+    )
 
 
 async def _send_reaction(
@@ -508,6 +582,30 @@ async def _send_reaction(
     await get_client().call("sendReaction", params)
     action = "Removed" if remove else "Sent"
     logger.info(f"{action} reaction {emoji!r} to {target_type}: {target}")
+
+    # Record the reaction into the history buffer after RPC success.
+    try:
+        key = conversation_key(
+            group_id=target if is_group else None,
+            sender_id=config.account,
+            destination=target if not is_group else None,
+            account=config.account,
+        )
+        if key is not None:
+            history_buffer.record_reaction(
+                conversation_key=key,
+                emoji=emoji,
+                author=config.account,
+                author_name=None,
+                target_author=target_author,
+                target_timestamp=target_timestamp,
+                is_remove=remove,
+                trusted_check=False,
+            )
+    except Exception:  # noqa: BLE001
+        logger.warning(
+            "Failed to record outbound reaction in history buffer", exc_info=True
+        )
 
 
 @mcp.tool()

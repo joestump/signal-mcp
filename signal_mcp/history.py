@@ -475,11 +475,15 @@ def record_outbound(
     timestamp: int | None,
     target: str,
     is_group: bool = False,
+    attachments: list[BufferedAttachment] | None = None,
 ) -> None:
     """Record an outbound send into the buffer, attributed to the account.
 
     ``target`` is the recipient (user number or group id). ``is_group``
-    determines the conversation key. Never raises.
+    determines the conversation key. ``attachments`` is metadata only (the
+    caller derives it from the daemon-ready entries); without it an
+    attachment-only send would buffer as an empty message and render as a
+    blank bubble. Never raises.
     """
     try:
         key = conversation_key(
@@ -499,6 +503,7 @@ def record_outbound(
                 sender_name=None,
                 text=text,
                 timestamp=timestamp,
+                attachments=list(attachments or []),
             )
         )
     except Exception:
