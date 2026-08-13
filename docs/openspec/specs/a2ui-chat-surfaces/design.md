@@ -89,7 +89,19 @@ Attachment handling is where a memory problem would hide, so it is pinned twice.
 
 **Choice**: register four resources against two handlers — `signal://conversation/{id}/a2ui` + `mcp://signal/conversation/{id}/a2ui` (thread) and `signal://conversations/a2ui` + `mcp://signal/conversations/a2ui` (index) — each declaring `mime_type="application/a2ui+json"`. `{id}` is percent-decoded with `urllib.parse.unquote` before lookup (Signal group ids are base64 and may contain `/` and `=`). Handlers snapshot the buffer synchronously and return the rendered envelope; they never touch the daemon.
 **Rationale**: template matching is literal, and both the host's plumbing and a hand-typed @-mention should resolve. Read handlers that never RPC make "reading MUST NOT mutate state" trivially true (SPEC-0001 REQ "Conversation Thread Resource").
-**Known mechanics risk**: FastMCP in `mcp>=1.29` supports `mime_type` on resources; whether it exposes resource *annotations* (`audience`) at the decorator level needs a spike. If it does not, the fallback is registering via the underlying low-level server API — the first implementation story carries this spike.
+**Resolved (spike #65, `mcp==1.29.0`)**: FastMCP's `@mcp.resource(...)` decorator accepts both `mime_type` and `annotations` at the decorator level. `annotations` takes an `mcp.types.Annotations(audience=["user"])` object — no low-level `Server` registration needed. The registration form for the next story:
+
+```python
+from mcp.types import Annotations
+
+@mcp.resource(
+    "signal://conversation/{id}/a2ui",
+    mime_type="application/a2ui+json",
+    annotations=Annotations(audience=["user"]),
+)
+async def thread_surface(id: str) -> str:
+    return json.dumps(render_thread(...))
+```
 
 ### Why spec.md has no boilerplate web-security or HTML-accessibility sections
 
@@ -151,7 +163,7 @@ Card
 
 ## Risks / Trade-offs
 
-- **FastMCP may not expose resource annotations (`audience`)** → spike in the foundation story; fall back to low-level server registration. Worst case, ship without the annotation (hosts still route on MIME type) and note the gap.
+- **FastMCP may not expose resource annotations (`audience`)** → ~~spike in the foundation story; fall back to low-level server registration. Worst case, ship without the annotation (hosts still route on MIME type) and note the gap.~~ **Resolved (spike #65):** `mcp==1.29.0` exposes `annotations=Annotations(audience=["user"])` on the `@mcp.resource(...)` decorator directly. No fallback needed.
 - **A2UI spec churn (v0.9 emitted; v0.9.1 current; v1.0 candidate)** → version and catalog id are single constants; bumps are coordinated with the host renderer rather than tracked eagerly.
 - **Memory growth** → three configurable caps (messages/conversation FIFO, conversations LRU, stored text/message); worst case at defaults is ~40 MiB (50 × 200 × 4 KiB) plus object overhead, typical usage far lower; attachments are metadata, never bytes.
 - **Envelope bloat from media** → ruled out by construction: payloads carry textual attachment lines only (no `data:` URIs, no base64), so envelope size is independent of attachment sizes.
@@ -171,6 +183,6 @@ Greenfield and additive — no schema, no persisted state, no changed tool shape
 
 ## Open Questions
 
-- Does `mcp` 1.29 FastMCP expose resource annotations, or is low-level registration required? (Spike in the first story.)
+- ~~Does `mcp` 1.29 FastMCP expose resource annotations, or is low-level registration required?~~ **Resolved (spike #65):** yes — `@mcp.resource(...)` accepts `annotations=Annotations(audience=["user"])` directly in `mcp==1.29.0`. No low-level registration needed.
 - Should attachment images eventually render as A2UI `Image` components using S3 presigned URLs, given their short TTL and host fetch policy? (Deferred; textual lines in v1.)
 - Exact `a2ui_action` tool contract for phase 2 — adopt the `a2ui_action`/`a2ui_error` naming and shape the host's round-trip (joestump-agent/crush#221) expects.
