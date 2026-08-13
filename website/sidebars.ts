@@ -6,7 +6,7 @@ const sidebars: SidebarsConfig = {
       type: 'category',
       label: 'Guides',
       collapsible: false,
-      items: ['intro', 'installation', 'channel-mode'],
+      items: ['intro', 'installation', 'channel-mode', 'a2ui-surfaces'],
     },
     {
       type: 'category',
