@@ -7,6 +7,7 @@ import logging
 from typing import Any
 
 from signal_mcp.config import config
+from signal_mcp.history import record_response
 from signal_mcp.parse import MessageResponse, _envelope_to_response
 
 logger = logging.getLogger(__name__)
@@ -136,6 +137,16 @@ class SignalRpcClient:
                     if obj.get("method") == "receive":
                         parsed = _envelope_to_response(obj.get("params") or {})
                         if parsed is not None:
+                            # History buffer tap — observes without consuming.
+                            # Recording is synchronous and never raises; a
+                            # failure here must not break delivery.
+                            try:
+                                record_response(parsed, account=config.account)
+                            except Exception:  # noqa: BLE001
+                                logger.warning(
+                                    "Failed to record message into history buffer",
+                                    exc_info=True,
+                                )
                             self._messages.put_nowait(parsed)
                     continue
 
