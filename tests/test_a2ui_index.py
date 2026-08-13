@@ -13,6 +13,7 @@ from signal_mcp.a2ui import (
 from signal_mcp.history import ConversationSummary
 
 FIXED_TIME = datetime(2026, 8, 12, 14, 2, 0, tzinfo=timezone.utc)
+OTHER = "+11234567890"
 
 
 def _summary(
@@ -127,3 +128,47 @@ def test_single_message_count_singular():
     comp_str = json.dumps(env)
     assert "1 message" in comp_str
     assert "1 messages" not in comp_str
+
+
+def test_unformattable_last_activity_leaves_no_dangling_separator():
+    """A timestamp _format_timestamp cannot render is omitted, separator and all.
+
+    last_activity is sender-derived, so an out-of-range value survives as a
+    non-None int. Testing the raw field rather than the formatted result left
+    the meta line reading "3 messages · " with nothing after the separator.
+    """
+    env = render_index(
+        summaries=[
+            ConversationSummary(
+                key=OTHER,
+                label="Bob",
+                preview="hi",
+                message_count=3,
+                last_activity=10**20,
+            )
+        ],
+        started_at_dt=FIXED_TIME,
+    )
+    components = env["updateComponents"]["components"]
+    meta = next(c for c in components if c["id"] == "conv-meta-0")
+    assert meta["text"] == "3 messages"
+
+
+def test_valid_last_activity_still_rendered():
+    """A normal timestamp still appears after the count."""
+    env = render_index(
+        summaries=[
+            ConversationSummary(
+                key=OTHER,
+                label="Bob",
+                preview="hi",
+                message_count=3,
+                last_activity=1786000000000,
+            )
+        ],
+        started_at_dt=FIXED_TIME,
+    )
+    components = env["updateComponents"]["components"]
+    meta = next(c for c in components if c["id"] == "conv-meta-0")
+    assert meta["text"].startswith("3 messages · ")
+    assert meta["text"].rstrip() != "3 messages ·"

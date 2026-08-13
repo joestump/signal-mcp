@@ -475,8 +475,12 @@ def render_index(
         meta_parts.append(
             f"{s.message_count} message" + ("s" if s.message_count != 1 else "")
         )
-        if s.last_activity is not None:
-            meta_parts.append(_format_timestamp(s.last_activity))
+        # _format_timestamp returns "" for a value it cannot interpret (the
+        # timestamp is sender-controlled), so test the formatted result rather
+        # than the raw field, or the meta line ends in a dangling separator.
+        formatted_activity = _format_timestamp(s.last_activity)
+        if formatted_activity:
+            meta_parts.append(formatted_activity)
 
         components.extend(
             [
