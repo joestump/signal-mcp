@@ -373,8 +373,17 @@ class ConversationBuffer:
             preview = preview.replace("\n", " ").strip()
             if len(preview) > 80:
                 preview = preview[:77] + "..."
+            # Substitute the sender's name for the key only in a DM, where the
+            # sender *is* the conversation (key == the counterparty's number).
+            # In a group the key is the group id and the newest sender is one
+            # member of many, so naming the thread after them would relabel the
+            # same conversation every time a different member posts.
             label = key
-            if newest.sender_name and newest.direction == "inbound":
+            if (
+                newest.sender_name
+                and newest.direction == "inbound"
+                and newest.sender_id == key
+            ):
                 label = newest.sender_name
             summaries.append(
                 ConversationSummary(

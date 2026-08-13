@@ -20,7 +20,7 @@ GROUP_ID = "dGVhbQ=="
 def _msg(
     key: str = OTHER_A,
     sender: str = OTHER_A,
-    name: str = "Alice",
+    name: str | None = "Alice",
     text: str | None = "hello",
     timestamp: int = 1000,
     direction: str = "inbound",
@@ -200,3 +200,50 @@ def test_started_at_is_recent():
     now = datetime.now(timezone.utc)
     delta = now - ts
     assert delta.total_seconds() < 60  # within a minute
+
+
+def test_group_conversation_label_stays_the_group_key():
+    """A group thread is not renamed after whoever spoke last.
+
+    The label used to become the newest inbound sender's name regardless of
+    whether the conversation was a DM, so a group flipped between member names
+    and was indistinguishable from a DM with the last speaker.
+    """
+    buf = ConversationBuffer()
+    buf.record(
+        _msg(key=GROUP_ID, sender=OTHER_A, name="Alice", text="hi", timestamp=1000)
+    )
+    assert buf.conversations()[0].label == GROUP_ID
+
+    buf.record(
+        _msg(key=GROUP_ID, sender=OTHER_B, name="Bob", text="hey", timestamp=2000)
+    )
+    convos = buf.conversations()
+    assert len(convos) == 1
+    assert convos[0].label == GROUP_ID
+    assert convos[0].preview == "hey"
+
+
+def test_dm_label_still_uses_sender_name():
+    """In a DM the sender is the conversation, so the name is the right label."""
+    buf = ConversationBuffer()
+    buf.record(
+        _msg(key=OTHER_A, sender=OTHER_A, name="Alice", text="hi", timestamp=1000)
+    )
+    assert buf.conversations()[0].label == "Alice"
+
+
+def test_outbound_only_conversation_labels_with_key():
+    """An outbound-only thread keeps the key as its label."""
+    buf = ConversationBuffer()
+    buf.record(
+        _msg(
+            key=OTHER_A,
+            sender=ACCOUNT,
+            name=None,
+            text="sent",
+            timestamp=1000,
+            direction="outbound",
+        )
+    )
+    assert buf.conversations()[0].label == OTHER_A
