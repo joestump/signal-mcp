@@ -438,7 +438,7 @@ def record_inbound(msg: "MessageResponse") -> None:
         key = conversation_key(
             group_id=msg.group_id,
             sender_id=msg.sender_id,
-            destination=getattr(msg, "destination", None),
+            destination=msg.destination,
             account=config.account,
         )
         if key is None:
@@ -503,3 +503,81 @@ def record_outbound(
         )
     except Exception:
         logger.warning("History buffer: record_outbound failed", exc_info=True)
+
+
+def record_response(msg: "MessageResponse", *, account: str) -> None:
+    """Route a parsed MessageResponse into the buffer.
+
+    This is the single entry point called from the RPC read-loop tap. It
+    derives the conversation key and routes to the appropriate buffer
+    method:
+
+    - **Reactions** (``msg.reaction`` is set): attaches via
+      :meth:`ConversationBuffer.record_reaction`, trust-gated.
+    - **Sync-sent** (``msg.is_sync_sent``): recorded as outbound — traffic
+      the account sent from the phone or another linked device belongs on
+      the account's own side of the thread.
+    - **Inbound**: recorded via :func:`record_inbound`, trust-gated.
+
+    Never raises — the caller wraps this in a try/except too, but this
+    helper is also internally safe.
+    """
+    try:
+        # Reaction path — attach to the target message.
+        if msg.reaction is not None:
+            key = conversation_key(
+                group_id=msg.group_id,
+                sender_id=msg.sender_id,
+                destination=msg.destination,
+                account=account,
+            )
+            if key is None:
+                return
+            buffer.record_reaction(
+                conversation_key=key,
+                emoji=msg.reaction.emoji,
+                author=msg.sender_id,
+                author_name=msg.sender_name,
+                target_author=msg.reaction.target_author,
+                target_timestamp=msg.reaction.target_timestamp,
+                is_remove=msg.reaction.is_remove,
+            )
+            return
+
+        # Sync-sent = the account sent this from the phone/another device.
+        if msg.is_sync_sent:
+            dest = msg.destination
+            key = conversation_key(
+                group_id=msg.group_id,
+                sender_id=account,
+                destination=dest,
+                account=account,
+            )
+            if key is None:
+                return
+            attachments = [
+                BufferedAttachment(
+                    id=a.id,
+                    filename=a.filename,
+                    content_type=a.content_type,
+                    size=a.size,
+                )
+                for a in msg.attachments
+            ]
+            buffer.record(
+                BufferedMessage(
+                    conversation_key=key,
+                    direction="outbound",
+                    sender_id=account,
+                    sender_name=None,
+                    text=msg.message,
+                    timestamp=msg.timestamp,
+                    attachments=attachments,
+                )
+            )
+            return
+
+        # Regular inbound.
+        record_inbound(msg)
+    except Exception:
+        logger.warning("History buffer: record_response failed", exc_info=True)
