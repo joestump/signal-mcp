@@ -25,6 +25,7 @@ reactions — through a long-running `signal-cli daemon`.
   - [Prefix filtering](#prefix-filtering)
   - [Claude Code channel setup](#claude-code-channel-setup)
 - [Tools](#tools)
+- [A2UI chat surfaces](#a2ui-chat-surfaces)
 - [Prompts](#prompts)
   - [User-defined prompts](#user-defined-prompts)
 - [Development](#development)
@@ -690,6 +691,46 @@ after `receive_message` returns. In channel mode this is done automatically.
   the received message).
 
 Returns `{"message": "Read receipt sent"}` on success.
+
+## A2UI chat surfaces
+
+When the MCP host supports [A2UI](https://a2ui.org), the server serves
+read-only chat-surface resources that render Signal conversations as native
+UI — two-sided message bubbles, sender names, human-readable timestamps,
+attachment lines, and emoji reactions on their target bubbles — instead of
+raw JSON.
+
+Four resource URIs are registered (two schemes × two surfaces):
+
+| URI | What it renders |
+|-----|-----------------|
+| `signal://conversations/a2ui` | Index of buffered conversations |
+| `mcp://signal/conversations/a2ui` | (same) |
+| `signal://conversation/{id}/a2ui` | One conversation thread |
+| `mcp://signal/conversation/{id}/a2ui` | (same) |
+
+`{id}` is a phone number (E.164) or a Signal group id. Group ids are
+base64 and may contain `/` and `=`, so they **must be percent-encoded** in
+the URI. All resources declare MIME `application/a2ui+json` and
+`audience: ["user"]` — the model's programmatic tools (`receive_message`,
+sends, reactions, `mark_read`) are unchanged.
+
+**History is in-memory, instance-local, and cleared on restart.** The
+buffer covers only traffic this server process observed during its own
+lifetime, plus its own outbound sends. The phone is the only complete
+record — do not describe this as a message archive. Two concurrently
+running instances will legitimately show different things.
+
+Three configurable caps bound memory use:
+
+| Flag | Env var | Default | Semantics |
+|------|---------|---------|-----------|
+| `--history-message-cap` | `SIGNAL_MCP_HISTORY_MESSAGE_CAP` | 200 | Messages per conversation (FIFO eviction) |
+| `--history-conversation-cap` | `SIGNAL_MCP_HISTORY_CONVERSATION_CAP` | 50 | Total conversations (LRU eviction) |
+| `--history-text-cap` | `SIGNAL_MCP_HISTORY_TEXT_CAP` | 4096 | Stored text bytes per message (truncation with marker) |
+
+See the [A2UI-over-MCP transport guide](https://a2ui.org/guides/a2ui_over_mcp/)
+for the normative wire contract.
 
 ## Prompts
 
