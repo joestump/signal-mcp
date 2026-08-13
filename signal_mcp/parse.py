@@ -171,8 +171,13 @@ def _envelope_to_response(
         return None
 
     # Track whether this is a sync-sent envelope (the account sent it from
-    # another linked device) and, for DMs, the destination number.
-    is_sync_sent = bool(sent_message)
+    # another linked device) and, for DMs, the destination number. The flag
+    # is derived from the payload actually parsed, not merely from the
+    # presence of ``sentMessage``: an envelope carrying both a dataMessage
+    # and a syncMessage resolves to the dataMessage above, and must not then
+    # claim to be sync-sent (downstream that would attribute a genuinely
+    # inbound message to the account and skip trust gating).
+    is_sync_sent = content is sent_message
     destination: str | None = None
     if is_sync_sent and not (content.get("groupInfo") or {}).get("groupId"):
         destination = sent_message.get("destination") or sent_message.get(

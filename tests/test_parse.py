@@ -632,3 +632,43 @@ def test_existing_sync_reaction_carries_flag():
     assert result is not None
     assert result.is_sync_sent is True
     assert result.destination == SELF
+
+
+# An envelope carrying *both* a dataMessage and a syncMessage. signal-cli
+# resolves this to the dataMessage, so the sync-sent flag must stay False —
+# otherwise a genuinely inbound message is later attributed to the account
+# and skips trust gating.
+DATA_AND_SYNC = _envelope(
+    ACCOUNT,
+    source=OTHER,
+    sourceNumber=OTHER,
+    sourceName="Bob Sagat",
+    sourceDevice=2,
+    timestamp=1782556000000,
+    dataMessage={
+        "timestamp": 1782556000000,
+        "message": "inbound from Bob",
+        "groupInfo": None,
+        "reaction": None,
+    },
+    syncMessage={
+        "sentMessage": {
+            "destination": OTHER,
+            "timestamp": 1782556000000,
+            "message": "stale sync payload",
+            "groupInfo": None,
+            "reaction": None,
+        }
+    },
+)
+
+
+def test_data_message_wins_over_sync_and_clears_flag():
+    """dataMessage wins the parse, so is_sync_sent must follow the parsed payload."""
+    result = _parse(DATA_AND_SYNC)
+    assert result is not None
+    # The dataMessage body is what was parsed...
+    assert result.message == "inbound from Bob"
+    # ...so the envelope must not claim to be sync-sent.
+    assert result.is_sync_sent is False
+    assert result.destination is None
