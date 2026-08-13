@@ -124,6 +124,11 @@ def button(
     In v1 buttons are inert placeholders — they carry the action name and
     context so an ``a2ui_action``-capable host can wire them once the action
     tool ships, but no send path exists yet.
+
+    Phase-2 constraint: when the ``a2ui_action`` tool ships, it MUST dispatch
+    exclusively to the existing ``_send_message`` / ``_send_reaction`` paths
+    and MUST enforce ``_ensure_trusted`` / ``_ensure_trusted_group`` — there
+    must be no send path that bypasses the allowlist.
     """
     btn: dict[str, Any] = {"component": "Button", "id": id, "label": label}
     if action_name is not None:
@@ -391,6 +396,12 @@ def render_thread(
             components.append(caption(react_id, " \u00b7 ".join(parts)))
             children.append(react_id)
 
+        # Action buttons (inert in v1 — the a2ui_action tool is phase 2).
+        actions_id = alloc.next("msg-actions")
+        reply_btn_id = alloc.next("msg-reply-btn")
+        react_btn_id = alloc.next("msg-react-btn")
+        children.append(actions_id)
+
         # Build the components for this message.
         components.extend(
             [
@@ -399,6 +410,18 @@ def render_thread(
                 text(sender_id, _sender_label(msg, account)),
                 caption(time_id, _format_timestamp(msg.timestamp)),
                 text(body_id, msg.text or ""),
+                row(actions_id, [reply_btn_id, react_btn_id]),
+                button(reply_btn_id, "Reply", action_name="reply"),
+                button(
+                    react_btn_id,
+                    "React",
+                    action_name="react",
+                    context={
+                        "conversation_id": conversation_id,
+                        "target_author": msg.sender_id or "",
+                        "target_timestamp": msg.timestamp or 0,
+                    },
+                ),
             ]
         )
 
