@@ -215,16 +215,21 @@ class ConversationBuffer:
 
             # Get or create the conversation deque (FIFO-bounded).
             if key not in self._conversations:
-                self._conversations[key] = collections.deque(
-                    maxlen=config.history_message_cap
-                )
-                # LRU: evict the least-recently-active conversation if over cap.
-                while len(self._conversations) > config.history_conversation_cap:
+                # LRU: make room *before* inserting, so the conversation being
+                # recorded is never the one evicted. The floor of one keeps a
+                # zero or negative cap degrading to "keep only the newest
+                # conversation" instead of evicting the key we are about to
+                # append to.
+                cap = max(1, config.history_conversation_cap)
+                while len(self._conversations) >= cap:
                     evicted_key, _ = self._conversations.popitem(last=False)
                     logger.debug(
                         f"History buffer: evicted conversation {evicted_key!r} "
                         "(LRU cap)"
                     )
+                self._conversations[key] = collections.deque(
+                    maxlen=config.history_message_cap
+                )
 
             self._conversations[key].append(message)
             self._conversations.move_to_end(key)

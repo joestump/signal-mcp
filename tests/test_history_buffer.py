@@ -359,3 +359,38 @@ def test_snapshot_is_a_copy():
     # Mutating the snapshot should not affect the buffer.
     snap.clear()
     assert len(buf.snapshot(OTHER)) == 1
+
+
+def test_non_positive_conversation_cap_does_not_wedge():
+    """A cap of 0 degrades to keeping the newest conversation, not a KeyError.
+
+    The eviction loop used to run *after* inserting the new key, so a cap of
+    zero evicted the key that was about to be appended to and every single
+    record() raised KeyError into the never-raises guard — one warning
+    traceback per message.
+    """
+    buf = ConversationBuffer()
+    with (
+        patch.object(config, "history_message_cap", 10),
+        patch.object(config, "history_conversation_cap", 0),
+    ):
+        buf.record(_msg(key="+111", text="a", timestamp=1))
+        buf.record(_msg(key="+222", text="b", timestamp=2))
+
+    # The older conversation is evicted, but the newest one is intact.
+    assert buf.snapshot("+111") == []
+    assert len(buf.snapshot("+222")) == 1
+
+
+def test_conversation_cap_is_never_exceeded():
+    """The buffer holds at most history_conversation_cap conversations."""
+    buf = ConversationBuffer()
+    with (
+        patch.object(config, "history_message_cap", 10),
+        patch.object(config, "history_conversation_cap", 3),
+    ):
+        for i in range(10):
+            buf.record(_msg(key=f"+{i}", text="x", timestamp=i))
+        assert len(buf.conversation_keys()) == 3
+    # The three most recently active survive.
+    assert buf.conversation_keys() == ["+7", "+8", "+9"]
