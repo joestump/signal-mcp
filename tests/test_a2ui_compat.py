@@ -1,6 +1,8 @@
 """Compatibility regression tests — existing tools unchanged after A2UI (#68)."""
 
 import asyncio
+import contextlib
+from collections.abc import Iterator
 from unittest.mock import patch
 
 from signal_mcp import rpc
@@ -47,6 +49,24 @@ class FakeClient:
         pass
 
 
+@contextlib.contextmanager
+def _isolated_buffer() -> Iterator[ConversationBuffer]:
+    """Point every binding of the buffer singleton at a throwaway instance.
+
+    The send path reaches the buffer through history.record_outbound, which
+    closes over ``history.buffer``; tools.py holds a separate ``history_buffer``
+    alias for the reaction path. Patching one and not the other leaves these
+    tests writing into the process-wide singleton, where they become someone
+    else's order-dependent flake.
+    """
+    buf = ConversationBuffer()
+    with (
+        patch("signal_mcp.history.buffer", buf),
+        patch("signal_mcp.tools.history_buffer", buf),
+    ):
+        yield buf
+
+
 def test_send_returns_same_shape():
     """send() returns {"message": "Message sent successfully"} — unchanged."""
     fake = FakeClient()
@@ -55,6 +75,7 @@ def test_send_returns_same_shape():
         patch.object(config, "account", ACCOUNT),
         patch.object(config, "operator", OTHER),
         patch.object(config, "trusted_recipients", frozenset()),
+        _isolated_buffer(),
     ):
         result = asyncio.run(send("hello"))
     assert result == {"message": "Message sent successfully"}
@@ -65,6 +86,7 @@ def test_send_message_to_user_returns_same_shape():
     with (
         patch.object(rpc, "client", fake),
         patch.object(config, "trusted_recipients", frozenset()),
+        _isolated_buffer(),
     ):
         result = asyncio.run(send_message_to_user("hi", OTHER))
     assert result == {"message": "Message sent successfully"}
@@ -76,6 +98,7 @@ def test_send_message_to_group_returns_same_shape():
     with (
         patch.object(rpc, "client", fake),
         patch.object(config, "trusted_recipients", frozenset()),
+        _isolated_buffer(),
     ):
         # Patch _resolve_group to avoid a daemon call.
         async def fake_resolve(name):
@@ -91,6 +114,7 @@ def test_send_reaction_to_user_returns_same_shape():
     with (
         patch.object(rpc, "client", fake),
         patch.object(config, "trusted_recipients", frozenset()),
+        _isolated_buffer(),
     ):
         result = asyncio.run(send_reaction_to_user("\U0001f44d", OTHER, OTHER, 1000))
     assert result == {"message": "Reaction sent successfully"}
@@ -101,6 +125,7 @@ def test_send_reaction_to_group_returns_same_shape():
     with (
         patch.object(rpc, "client", fake),
         patch.object(config, "trusted_recipients", frozenset()),
+        _isolated_buffer(),
     ):
 
         async def fake_resolve(name):
@@ -160,10 +185,38 @@ def test_no_resources_host_path_unchanged():
         patch.object(config, "account", ACCOUNT),
         patch.object(config, "operator", OTHER),
         patch.object(config, "trusted_recipients", frozenset()),
-        patch("signal_mcp.tools.history_buffer", ConversationBuffer()),
+        _isolated_buffer() as buf,
     ):
         # Exercise send + send_message_to_user — both should work.
         r1 = asyncio.run(send("text me"))
         r2 = asyncio.run(send_message_to_user("hi", OTHER))
+        # Both sends landed in *this* buffer, which is what makes the
+        # isolation real rather than decorative.
+        assert sum(len(buf.snapshot(k)) for k in buf.conversation_keys()) == 2
     assert r1 == {"message": "Message sent successfully"}
     assert r2 == {"message": "Message sent successfully"}
+
+
+def test_compat_tests_do_not_pollute_the_global_buffer():
+    """Driving a send path here must not write into the process-wide buffer.
+
+    The isolation helper patches both bindings; patching only the tools alias
+    left history.record_outbound writing to the real singleton, which turns
+    into an order-dependent flake for any later test that reads it.
+    """
+    from signal_mcp import history
+
+    before = sum(
+        len(history.buffer.snapshot(k)) for k in history.buffer.conversation_keys()
+    )
+    fake = FakeClient()
+    with (
+        patch.object(rpc, "client", fake),
+        patch.object(config, "trusted_recipients", frozenset()),
+        _isolated_buffer(),
+    ):
+        asyncio.run(send_message_to_user("hi", OTHER))
+    after = sum(
+        len(history.buffer.snapshot(k)) for k in history.buffer.conversation_keys()
+    )
+    assert before == after

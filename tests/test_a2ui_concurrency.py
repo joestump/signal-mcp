@@ -23,7 +23,14 @@ def _msg(text: str, timestamp: int) -> BufferedMessage:
 
 
 def test_concurrent_arrival_and_render():
-    """Interleave thread renders with new messages arriving — every render is valid."""
+    """Render on one task while another records, and prove the view holds still.
+
+    The producer and the renderer are real asyncio tasks with yield points
+    between every step, so the producer genuinely runs while the renderer is
+    suspended part-way through a render. That is the only arrangement in which
+    the snapshot guarantee can actually be observed: a sequential loop cannot
+    interleave, so it would pass even if snapshot() handed back the live deque.
+    """
 
     async def scenario():
         buf = ConversationBuffer()
@@ -36,21 +43,49 @@ def test_concurrent_arrival_and_render():
         ):
             from signal_mcp.a2ui import render_thread
 
-            for i in range(50):
-                buf.record(_msg(f"msg-{i}", 1000 + i))
-                # Render mid-arrival.
-                messages = buf.snapshot(OTHER)
-                env = render_thread(
-                    conversation_id=OTHER,
-                    label="Bob",
-                    messages=messages,
-                    account=ACCOUNT,
-                )
-                # Every render must produce a valid envelope.
-                components = env["updateComponents"]["components"]
-                validate_adjacency(components)
-                # The rendered count must never exceed the buffer's.
-                assert len(messages) == min(i + 1, 200)
+            done = asyncio.Event()
+            renders = 0
+
+            async def produce() -> None:
+                for i in range(50):
+                    buf.record(_msg(f"msg-{i}", 1000 + i))
+                    await asyncio.sleep(0)
+                done.set()
+
+            async def render() -> None:
+                nonlocal renders
+                while not done.is_set():
+                    messages = buf.snapshot(OTHER)
+                    observed = len(messages)
+                    # Suspend mid-render: the producer records while we wait.
+                    await asyncio.sleep(0)
+                    # The snapshot must not have moved under us. Were snapshot()
+                    # returning the live deque, this is where it would grow.
+                    assert len(messages) == observed
+                    env = render_thread(
+                        conversation_id=OTHER,
+                        label="Bob",
+                        messages=messages,
+                        account=ACCOUNT,
+                    )
+                    validate_adjacency(env["updateComponents"]["components"])
+                    # The envelope must describe the snapshot it was handed,
+                    # not whatever the buffer holds now.
+                    body_ids = [
+                        c["id"]
+                        for c in env["updateComponents"]["components"]
+                        if c["id"].startswith("msg-body-")
+                    ]
+                    assert len(body_ids) == observed
+                    renders += 1
+                    await asyncio.sleep(0)
+
+            await asyncio.gather(produce(), render())
+
+            # The renderer really did run alongside the producer, and really
+            # did observe the buffer part-way through filling.
+            assert renders > 1
+            assert len(buf.snapshot(OTHER)) == 50
 
     asyncio.run(scenario())
 
