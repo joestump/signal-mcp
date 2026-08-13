@@ -493,3 +493,142 @@ def test_send_reaction_remove_passes_flag(monkeypatch):
     asyncio.run(_send_reaction(THUMBS_UP, SELF, SELF, 1782554453770, remove=True))
     _, params = fake.calls[-1]
     assert params["remove"] is True
+
+
+# ---------------------------------------------------------------------------
+# Sync-sent envelope identification (#54)
+# ---------------------------------------------------------------------------
+
+# A sync-sent DM — the account sent this from the phone, addressed to OTHER.
+SYNC_SENT_DM = _envelope(
+    SELF,
+    source=SELF,
+    sourceNumber=SELF,
+    sourceUuid=SELF_UUID,
+    sourceName="Tester",
+    sourceDevice=1,
+    timestamp=1782555600000,
+    syncMessage={
+        "sentMessage": {
+            "destination": OTHER,
+            "timestamp": 1782555600000,
+            "message": "sent from my phone",
+            "groupInfo": None,
+            "reaction": None,
+        }
+    },
+)
+
+# A sync-sent group message — the account sent this to a group from the phone.
+SYNC_SENT_GROUP = _envelope(
+    SELF,
+    source=SELF,
+    sourceNumber=SELF,
+    sourceUuid=SELF_UUID,
+    sourceName="Tester",
+    sourceDevice=1,
+    timestamp=1782555700000,
+    syncMessage={
+        "sentMessage": {
+            "timestamp": 1782555700000,
+            "message": "hi team from phone",
+            "groupInfo": {"groupId": "GID==", "type": "DELIVER"},
+            "reaction": None,
+        }
+    },
+)
+
+# A sync-sent reaction — reacting from the phone to a message from OTHER.
+SYNC_SENT_REACTION = _envelope(
+    SELF,
+    source=SELF,
+    sourceNumber=SELF,
+    sourceUuid=SELF_UUID,
+    sourceName="Tester",
+    sourceDevice=1,
+    timestamp=1782555800000,
+    syncMessage={
+        "sentMessage": {
+            "destination": OTHER,
+            "timestamp": 1782555800000,
+            "message": None,
+            "reaction": {
+                "emoji": THUMBS_UP,
+                "targetAuthor": OTHER,
+                "targetSentTimestamp": 1744185565466,
+                "isRemove": False,
+            },
+        }
+    },
+)
+
+# Note-to-Self: a sync-sent message where destination equals the account.
+SYNC_SENT_NOTE_TO_SELF = _envelope(
+    SELF,
+    source=SELF,
+    sourceNumber=SELF,
+    sourceUuid=SELF_UUID,
+    sourceName="Tester",
+    sourceDevice=1,
+    timestamp=1782555900000,
+    syncMessage={
+        "sentMessage": {
+            "destination": SELF,
+            "timestamp": 1782555900000,
+            "message": "note to self",
+            "groupInfo": None,
+            "reaction": None,
+        }
+    },
+)
+
+
+def test_sync_sent_dm_sets_flag_and_destination():
+    """A syncMessage.sentMessage DM carries is_sync_sent=True and destination."""
+    result = _parse(SYNC_SENT_DM)
+    assert result is not None
+    assert result.is_sync_sent is True
+    assert result.destination == OTHER
+
+
+def test_sync_sent_group_sets_flag_no_destination():
+    """A syncMessage.sentMessage group message: is_sync_sent=True, destination=None."""
+    result = _parse(SYNC_SENT_GROUP)
+    assert result is not None
+    assert result.is_sync_sent is True
+    assert result.destination is None
+    assert result.group_id == "GID=="
+
+
+def test_data_message_does_not_set_sync_flag():
+    """A plain dataMessage envelope has is_sync_sent=False and destination=None."""
+    result = _parse(DIRECT_MESSAGE)
+    assert result is not None
+    assert result.is_sync_sent is False
+    assert result.destination is None
+
+
+def test_sync_sent_reaction_carries_flag():
+    """A synced reaction carries the same is_sync_sent/destination as a synced message."""
+    result = _parse(SYNC_SENT_REACTION)
+    assert result is not None
+    assert result.is_sync_sent is True
+    assert result.destination == OTHER
+    assert result.reaction is not None
+    assert result.reaction.emoji == THUMBS_UP
+
+
+def test_sync_sent_note_to_self_destination_is_self():
+    """Note-to-Self sync: destination equals the account's own number."""
+    result = _parse(SYNC_SENT_NOTE_TO_SELF)
+    assert result is not None
+    assert result.is_sync_sent is True
+    assert result.destination == SELF
+
+
+def test_existing_sync_reaction_carries_flag():
+    """The pre-existing SYNC_REACTION fixture also sets is_sync_sent=True."""
+    result = _parse(SYNC_REACTION)
+    assert result is not None
+    assert result.is_sync_sent is True
+    assert result.destination == SELF

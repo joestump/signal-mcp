@@ -63,6 +63,14 @@ class MessageResponse:
     reaction: Reaction | None = None
     # File attachments on the message; empty when there are none.
     attachments: list[Attachment] = field(default_factory=list)
+    # True when the envelope arrived via ``syncMessage.sentMessage`` —
+    # something the account sent from the phone or another linked device,
+    # including Note-to-Self. Existing consumers ignore this.
+    is_sync_sent: bool = False
+    # For sync-sent direct messages, the destination number
+    # (``sentMessage.destination`` / ``destinationNumber``). ``None`` for
+    # group traffic (the group id is already on ``group_id``).
+    destination: str | None = None
 
 
 def _resolve_attachment_path(attachment_id: str, attachments_dir: str) -> str | None:
@@ -162,6 +170,15 @@ def _envelope_to_response(
     if not content:
         return None
 
+    # Track whether this is a sync-sent envelope (the account sent it from
+    # another linked device) and, for DMs, the destination number.
+    is_sync_sent = bool(sent_message)
+    destination: str | None = None
+    if is_sync_sent and not (content.get("groupInfo") or {}).get("groupId"):
+        destination = sent_message.get("destination") or sent_message.get(
+            "destinationNumber"
+        )
+
     group_info = content.get("groupInfo") or {}
     group = group_info.get("groupId")
     timestamp = content.get("timestamp") or envelope.get("timestamp")
@@ -184,6 +201,8 @@ def _envelope_to_response(
                 target_timestamp=reaction.get("targetSentTimestamp"),
                 is_remove=reaction.get("isRemove", False),
             ),
+            is_sync_sent=is_sync_sent,
+            destination=destination,
         )
 
     if attachments_dir is None:
@@ -204,6 +223,8 @@ def _envelope_to_response(
             group_id=group,
             timestamp=timestamp,
             attachments=attachments,
+            is_sync_sent=is_sync_sent,
+            destination=destination,
         )
 
     return None
