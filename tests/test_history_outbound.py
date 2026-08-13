@@ -1,7 +1,9 @@
 """Tests for outbound history buffer recording in tools.py (#60)."""
 
 import asyncio
+import contextlib
 import logging
+from collections.abc import Iterator
 from unittest.mock import patch
 
 from signal_mcp.config import config
@@ -31,6 +33,22 @@ class FakeClient:
         return {"timestamp": self.next_timestamp}
 
 
+@contextlib.contextmanager
+def _patched_buffer(buf: ConversationBuffer) -> Iterator[None]:
+    """Patch every binding of the module-level buffer singleton.
+
+    tools.py holds its own ``history_buffer`` alias for the reaction path,
+    while message sends go through ``history.record_outbound``, which closes
+    over ``history.buffer``. Patching only one leaves the other writing to the
+    real singleton.
+    """
+    with (
+        patch("signal_mcp.history.buffer", buf),
+        patch("signal_mcp.tools.history_buffer", buf),
+    ):
+        yield
+
+
 def test_outbound_dm_recorded():
     """A successful DM send is recorded in the buffer with the daemon-returned timestamp."""
     fake = FakeClient()
@@ -38,7 +56,7 @@ def test_outbound_dm_recorded():
     with (
         patch.object(rpc, "client", fake),
         patch.object(config, "account", ACCOUNT),
-        patch("signal_mcp.tools.history_buffer", buf),
+        _patched_buffer(buf),
     ):
         asyncio.run(_send_message("reply", OTHER))
 
@@ -57,7 +75,7 @@ def test_outbound_group_recorded():
     with (
         patch.object(rpc, "client", fake),
         patch.object(config, "account", ACCOUNT),
-        patch("signal_mcp.tools.history_buffer", buf),
+        _patched_buffer(buf),
     ):
         asyncio.run(_send_message("team update", GROUP_ID, is_group=True))
 
@@ -86,7 +104,7 @@ def test_outbound_reaction_recorded():
     with (
         patch.object(rpc, "client", fake),
         patch.object(config, "account", ACCOUNT),
-        patch("signal_mcp.tools.history_buffer", buf),
+        _patched_buffer(buf),
     ):
         asyncio.run(_send_reaction("\U0001f44d", OTHER, OTHER, 1000))
 
@@ -105,7 +123,7 @@ def test_failed_send_records_nothing():
     with (
         patch.object(rpc, "client", fake),
         patch.object(config, "account", ACCOUNT),
-        patch("signal_mcp.tools.history_buffer", buf),
+        _patched_buffer(buf),
     ):
         try:
             asyncio.run(_send_message("reply", OTHER))
@@ -122,7 +140,7 @@ def test_buffer_failure_does_not_break_send(caplog):
         patch.object(rpc, "client", fake),
         patch.object(config, "account", ACCOUNT),
         patch(
-            "signal_mcp.tools.conversation_key",
+            "signal_mcp.history.conversation_key",
             side_effect=RuntimeError("buffer boom"),
         ),
         caplog.at_level(logging.WARNING),
@@ -130,4 +148,91 @@ def test_buffer_failure_does_not_break_send(caplog):
         # Should not raise — the send itself succeeds.
         asyncio.run(_send_message("reply", OTHER))
 
-    assert any("Failed to record" in r.message for r in caplog.records)
+    assert any("record_outbound failed" in r.message for r in caplog.records)
+
+
+# ---------------------------------------------------------------------------
+# Attachment metadata — an attachment-only send must not buffer as blank
+# ---------------------------------------------------------------------------
+
+
+def test_outbound_local_path_attachment_recorded(tmp_path):
+    """A local-path attachment is buffered as name/type/size metadata."""
+    photo = tmp_path / "photo.png"
+    photo.write_bytes(b"\x89PNG" + b"0" * 100)
+
+    fake = FakeClient()
+    buf = ConversationBuffer()
+    with (
+        patch.object(rpc, "client", fake),
+        patch.object(config, "account", ACCOUNT),
+        _patched_buffer(buf),
+    ):
+        asyncio.run(_send_message("", OTHER, attachments=[str(photo)]))
+
+    snap = buf.snapshot(OTHER)
+    assert len(snap) == 1
+    assert len(snap[0].attachments) == 1
+    att = snap[0].attachments[0]
+    assert att.filename == "photo.png"
+    assert att.content_type == "image/png"
+    assert att.size == 104
+    # Metadata only — no path, no bytes.
+    assert not hasattr(att, "path")
+
+
+def test_outbound_data_uri_attachment_recorded():
+    """A data URI yields its declared mime type, filename, and decoded size."""
+    fake = FakeClient()
+    buf = ConversationBuffer()
+    # 9 bytes -> 12 base64 chars, no padding.
+    data_uri = "data:image/jpeg;filename=snap%20shot.jpg;base64,MTIzNDU2Nzg5"
+    with (
+        patch.object(rpc, "client", fake),
+        patch.object(config, "account", ACCOUNT),
+        _patched_buffer(buf),
+    ):
+        asyncio.run(_send_message("", OTHER, attachments=[data_uri]))
+
+    att = buf.snapshot(OTHER)[0].attachments[0]
+    assert att.filename == "snap shot.jpg"
+    assert att.content_type == "image/jpeg"
+    assert att.size == 9
+
+
+def test_outbound_attachment_only_send_is_not_blank():
+    """An attachment-only send renders as an attachment, not an empty bubble."""
+    fake = FakeClient()
+    buf = ConversationBuffer()
+    with (
+        patch.object(rpc, "client", fake),
+        patch.object(config, "account", ACCOUNT),
+        _patched_buffer(buf),
+    ):
+        asyncio.run(
+            _send_message("", OTHER, attachments=["data:image/png;base64,MTIz"])
+        )
+
+    msg = buf.snapshot(OTHER)[0]
+    assert not msg.text
+    # Without the attachment record this message would be indistinguishable
+    # from a blank one.
+    assert len(msg.attachments) == 1
+    assert msg.attachments[0].content_type == "image/png"
+
+
+def test_outbound_unreadable_attachment_still_recorded():
+    """A path that does not exist still yields a record, with size unknown."""
+    fake = FakeClient()
+    buf = ConversationBuffer()
+    with (
+        patch.object(rpc, "client", fake),
+        patch.object(config, "account", ACCOUNT),
+        _patched_buffer(buf),
+    ):
+        asyncio.run(_send_message("", OTHER, attachments=["/nope/missing.pdf"]))
+
+    att = buf.snapshot(OTHER)[0].attachments[0]
+    assert att.filename == "missing.pdf"
+    assert att.content_type == "application/pdf"
+    assert att.size is None
