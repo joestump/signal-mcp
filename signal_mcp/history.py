@@ -7,8 +7,17 @@ The phone is the only complete record — never describe this as an archive.
 See ADR-0001 and SPEC-0001 REQ "Per-Instance History Divergence".
 """
 
+import collections
+import logging
 from dataclasses import dataclass, field
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
+
+from signal_mcp.config import config, is_trusted_sender
+
+if TYPE_CHECKING:
+    from signal_mcp.parse import MessageResponse
+
+logger = logging.getLogger(__name__)
 
 # The direction of a buffered message relative to the server's account.
 Direction = Literal["inbound", "outbound"]
@@ -116,3 +125,220 @@ def conversation_key(
         return account
 
     return None
+
+
+def _truncate_text(text: str | None, cap: int) -> tuple[str | None, bool]:
+    """Truncate *text* to at most *cap* bytes, returning (text, truncated).
+
+    Slices at the byte boundary with ``errors="ignore"`` so a multi-byte
+    character is never split. Appends :data:`TRUNCATION_MARKER` when
+    truncation occurs.
+    """
+    if text is None:
+        return None, False
+    encoded = text.encode("utf-8")
+    if len(encoded) <= cap:
+        return text, False
+    truncated = encoded[:cap].decode("utf-8", errors="ignore")
+    return truncated + TRUNCATION_MARKER, True
+
+
+def _clamp_metadata(value: str | None) -> str | None:
+    """Truncate a sender-controlled metadata string to METADATA_MAX_LEN bytes."""
+    if value is None:
+        return None
+    encoded = value.encode("utf-8")
+    if len(encoded) <= METADATA_MAX_LEN:
+        return value
+    return encoded[:METADATA_MAX_LEN].decode("utf-8", errors="ignore")
+
+
+class ConversationBuffer:
+    """Bounded in-memory conversation buffer.
+
+    Backed by ``OrderedDict[str, deque[BufferedMessage]]``:
+
+    - **Per-conversation cap (FIFO)**: each deque has ``maxlen`` set to
+      ``config.history_message_cap``, so overflow evicts the oldest message
+      automatically.
+    - **Conversation cap (LRU)**: after inserting a new key, conversations
+      beyond ``config.history_conversation_cap`` are evicted
+      least-recently-active first (``OrderedDict.popitem(last=False)``).
+    - **Text cap**: stored text is truncated at ``config.history_text_cap``
+      bytes with a visible truncation marker.
+
+    All eviction and truncation is silent (debug-logged) and **never
+    raises** — a failure to record must not break message delivery (SPEC-0001
+    REQ "Error Handling Standards").
+
+    Channel-mode *prefix* filtering is deliberately **not** applied here —
+    a trusted message without the ``cc`` prefix is still real conversation
+    content and belongs in the thread, even though it is not forwarded to
+    the model.
+    """
+
+    def __init__(self) -> None:
+        self._conversations: collections.OrderedDict[
+            str, collections.deque[BufferedMessage]
+        ] = collections.OrderedDict()
+
+    def record(self, message: BufferedMessage) -> None:
+        """Record a message into the buffer.
+
+        This is the single low-level entry point. It applies text
+        truncation, attachment metadata clamping, FIFO per-conversation
+        eviction, and LRU cross-conversation eviction. Never raises —
+        any internal failure is caught, logged at warning, and swallowed.
+        """
+        try:
+            key = message.conversation_key
+            if not key:
+                return
+
+            # Apply text cap.
+            text, truncated = _truncate_text(message.text, config.history_text_cap)
+            message.text = text
+            message.truncated = truncated
+
+            # Clamp attachment metadata.
+            clamped: list[BufferedAttachment] = []
+            for att in message.attachments:
+                clamped.append(
+                    BufferedAttachment(
+                        id=att.id,
+                        filename=_clamp_metadata(att.filename),
+                        content_type=_clamp_metadata(att.content_type),
+                        size=att.size,
+                    )
+                )
+            message.attachments = clamped
+
+            # Get or create the conversation deque (FIFO-bounded).
+            if key not in self._conversations:
+                # LRU: make room *before* inserting, so the conversation being
+                # recorded is never the one evicted. The floor of one keeps a
+                # zero or negative cap degrading to "keep only the newest
+                # conversation" instead of evicting the key we are about to
+                # append to.
+                cap = max(1, config.history_conversation_cap)
+                while len(self._conversations) >= cap:
+                    evicted_key, _ = self._conversations.popitem(last=False)
+                    logger.debug(
+                        f"History buffer: evicted conversation {evicted_key!r} "
+                        "(LRU cap)"
+                    )
+                self._conversations[key] = collections.deque(
+                    maxlen=config.history_message_cap
+                )
+
+            self._conversations[key].append(message)
+            self._conversations.move_to_end(key)
+
+            if truncated:
+                logger.debug(
+                    f"History buffer: truncated message text for {key!r} "
+                    f"(cap={config.history_text_cap})"
+                )
+        except Exception:
+            logger.warning("History buffer: failed to record message", exc_info=True)
+
+    def snapshot(self, key: str) -> list[BufferedMessage]:
+        """Return a point-in-time copy of a conversation's messages.
+
+        Returns an empty list when the conversation has no buffered
+        messages. The copy is a plain list so the caller is immune to
+        mid-iteration mutation.
+        """
+        deque_ = self._conversations.get(key)
+        if deque_ is None:
+            return []
+        return list(deque_)
+
+    def conversation_keys(self) -> list[str]:
+        """Return all buffered conversation keys, most-recently-active last."""
+        return list(self._conversations.keys())
+
+
+# Module-level singleton for the tap stories to import.
+buffer = ConversationBuffer()
+
+
+def record_inbound(msg: "MessageResponse") -> None:
+    """Record an inbound MessageResponse into the buffer, trust-gated.
+
+    Applies ``is_trusted_sender`` — untrusted authors are silently dropped
+    so a surface can never become a side channel around the existing gate.
+    Never raises. Does not implement reaction attachment (separate issue).
+    """
+    try:
+        if not is_trusted_sender(msg.sender_id):
+            return
+
+        key = conversation_key(
+            group_id=msg.group_id,
+            sender_id=msg.sender_id,
+            destination=getattr(msg, "destination", None),
+            account=config.account,
+        )
+        if key is None:
+            return
+
+        attachments = [
+            BufferedAttachment(
+                id=a.id,
+                filename=a.filename,
+                content_type=a.content_type,
+                size=a.size,
+            )
+            for a in msg.attachments
+        ]
+
+        buffer.record(
+            BufferedMessage(
+                conversation_key=key,
+                direction="inbound",
+                sender_id=msg.sender_id,
+                sender_name=msg.sender_name,
+                text=msg.message,
+                timestamp=msg.timestamp,
+                attachments=attachments,
+            )
+        )
+    except Exception:
+        logger.warning("History buffer: record_inbound failed", exc_info=True)
+
+
+def record_outbound(
+    *,
+    text: str | None,
+    timestamp: int | None,
+    target: str,
+    is_group: bool = False,
+) -> None:
+    """Record an outbound send into the buffer, attributed to the account.
+
+    ``target`` is the recipient (user number or group id). ``is_group``
+    determines the conversation key. Never raises.
+    """
+    try:
+        key = conversation_key(
+            group_id=target if is_group else None,
+            sender_id=config.account,
+            destination=target if not is_group else None,
+            account=config.account,
+        )
+        if key is None:
+            return
+
+        buffer.record(
+            BufferedMessage(
+                conversation_key=key,
+                direction="outbound",
+                sender_id=config.account,
+                sender_name=None,
+                text=text,
+                timestamp=timestamp,
+            )
+        )
+    except Exception:
+        logger.warning("History buffer: record_outbound failed", exc_info=True)
