@@ -70,6 +70,13 @@ reply with send_message_to_group passing group as group_id, so the answer lands
 in the group rather than as a direct message to its author.
 Use send to proactively message the operator's phone (no phone number needed).
 Always reply to acknowledge inbound messages, even if briefly.
+When the user asks to see messages or conversation threads, read the A2UI
+chat-surface resources: signal://conversations/a2ui lists buffered
+conversations, and signal://conversation/{id}/a2ui renders one thread as
+two-sided chat bubbles. Group ids are base64 and may contain / and =, so
+they must be percent-encoded in the URI. These surfaces show this server
+instance's in-memory view since it started — they are not an archive; the
+phone is the complete record.
 
 """
     + SIGNAL_FORMATTING_RULES

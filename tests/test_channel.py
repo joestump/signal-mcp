@@ -582,3 +582,11 @@ def test_untrusted_sender_dropped_before_attachment_handling(monkeypatch):
     )
     assert sent == []
     assert [c for c in fake.calls if c[0] == "sendReceipt"] == []
+
+
+def test_channel_instructions_mention_a2ui_resources():
+    """CHANNEL_INSTRUCTIONS must name both A2UI resource URIs (SPEC-0001 #67)."""
+    from signal_mcp.channel import CHANNEL_INSTRUCTIONS
+
+    assert "signal://conversations/a2ui" in CHANNEL_INSTRUCTIONS
+    assert "signal://conversation/{id}/a2ui" in CHANNEL_INSTRUCTIONS
