@@ -2,6 +2,21 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Architecture Context
+- Architecture Decision Records are in docs/adrs/
+- Specifications are in docs/openspec/specs/
+
+### SDD Configuration
+
+#### Tracker
+- **Type**: github
+- **Owner**: joestump
+- **Repo**: signal-mcp
+
+#### Branch Conventions
+- **Prefix**: feat
+- **Epic Prefix**: epic
+
 ## Commands
 - Run: `uv run signal-mcp --operator OPERATOR_NUMBER [--account ACCOUNT_NUMBER] [--transport {sse|stdio}]`
   - `--operator` = the human the agent serves (who it messages / listens to).
