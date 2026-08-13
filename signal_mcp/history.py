@@ -161,9 +161,10 @@ class ConversationBuffer:
     - **Per-conversation cap (FIFO)**: each deque has ``maxlen`` set to
       ``config.history_message_cap``, so overflow evicts the oldest message
       automatically.
-    - **Conversation cap (LRU)**: after inserting a new key, conversations
+    - **Conversation cap (LRU)**: before inserting a new key, conversations
       beyond ``config.history_conversation_cap`` are evicted
-      least-recently-active first (``OrderedDict.popitem(last=False)``).
+      least-recently-active first (``OrderedDict.popitem(last=False)``), so
+      the conversation being recorded is never the one evicted.
     - **Text cap**: stored text is truncated at ``config.history_text_cap``
       bytes with a visible truncation marker.
 
