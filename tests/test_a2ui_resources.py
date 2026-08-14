@@ -252,3 +252,115 @@ def test_unknown_conversation_heading_falls_back_to_the_key():
         c for c in env["updateComponents"]["components"] if c["id"] == "heading"
     )
     assert heading["text"] == "+999"
+
+
+def _buffer_with_message():
+    """A buffer holding one inbound DM from Alice."""
+    from signal_mcp.history import BufferedMessage, ConversationBuffer
+
+    buf = ConversationBuffer()
+    buf.record(
+        BufferedMessage(
+            conversation_key="+123",
+            direction="inbound",
+            sender_id="+123",
+            sender_name="Alice",
+            text="hello",
+            timestamp=1000,
+        )
+    )
+    return buf
+
+
+def test_read_index_with_width_hint():
+    """A ?w=<width> hint on the index URI no longer fails resolution.
+
+    A2UI-capable hosts append an optional width hint to any /a2ui URI; the
+    SDK matches resources on the full URI string, so the hint used to make
+    every read fail with "Unknown resource".
+    """
+    import asyncio
+
+    with (
+        patch("signal_mcp.tools.history_buffer", _buffer_with_message()),
+        patch.object(config, "account", "+456"),
+    ):
+        contents = asyncio.run(mcp.read_resource("signal://conversations/a2ui?w=112"))
+
+    (content,) = contents
+    assert content.mime_type == "application/a2ui+json"
+    env = json.loads(content.content)
+    assert env["version"] == "v0.9"
+    assert "Alice" in content.content
+
+
+def test_read_index_with_width_hint_mcp_scheme():
+    """The mcp:// twin of the index URI tolerates the hint too."""
+    import asyncio
+
+    with (
+        patch("signal_mcp.tools.history_buffer", _buffer_with_message()),
+        patch.object(config, "account", "+456"),
+    ):
+        contents = asyncio.run(
+            mcp.read_resource("mcp://signal/conversations/a2ui?w=112")
+        )
+
+    (content,) = contents
+    assert content.mime_type == "application/a2ui+json"
+    assert "Alice" in content.content
+
+
+def test_read_thread_template_with_width_hint():
+    """A ?w=<width> hint resolves against the thread template as well."""
+    import asyncio
+
+    with (
+        patch("signal_mcp.tools.history_buffer", _buffer_with_message()),
+        patch.object(config, "account", "+456"),
+    ):
+        contents = asyncio.run(
+            mcp.read_resource("signal://conversation/%2B123/a2ui?w=80")
+        )
+
+    (content,) = contents
+    assert content.mime_type == "application/a2ui+json"
+    assert "hello" in content.content
+
+
+def test_read_fragment_is_also_stripped():
+    """A #fragment on the URI resolves like the bare URI."""
+    import asyncio
+
+    with (
+        patch("signal_mcp.tools.history_buffer", _buffer_with_message()),
+        patch.object(config, "account", "+456"),
+    ):
+        contents = asyncio.run(mcp.read_resource("signal://conversations/a2ui#anchor"))
+
+    (content,) = contents
+    assert "Alice" in content.content
+
+
+def test_read_without_query_still_resolves():
+    """The bare URI keeps working unchanged."""
+    import asyncio
+
+    with (
+        patch("signal_mcp.tools.history_buffer", _buffer_with_message()),
+        patch.object(config, "account", "+456"),
+    ):
+        contents = asyncio.run(mcp.read_resource("signal://conversations/a2ui"))
+
+    (content,) = contents
+    assert "Alice" in content.content
+
+
+def test_unknown_resource_with_query_still_errors():
+    """Stripping the hint does not turn unknown URIs into known ones."""
+    import asyncio
+
+    import pytest
+
+    with pytest.raises(ValueError, match="Unknown resource"):
+        asyncio.run(mcp.read_resource("signal://nope/a2ui?w=112"))

@@ -14,14 +14,16 @@ import shutil
 import tempfile
 import urllib.error
 import urllib.request
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterable
 from email.message import EmailMessage
 from pathlib import Path
 from typing import Any, ParamSpec, TypeVar
 from urllib.parse import quote, unquote, urlsplit
 
 from mcp.server.fastmcp import FastMCP
+from mcp.server.lowlevel.helper_types import ReadResourceContents
 from mcp.types import Annotations
+from pydantic import AnyUrl
 
 from signal_mcp import a2ui, s3
 from signal_mcp.config import _normalize_recipient, config, is_trusted_sender
@@ -43,8 +45,24 @@ from signal_mcp.rpc import (
 
 logger = logging.getLogger(__name__)
 
+
+class SignalMCPServer(FastMCP):
+    """FastMCP server whose resource reads tolerate query strings on URIs.
+
+    A2UI-capable hosts append an optional ``?w=<width>`` hint to any ``/a2ui``
+    resource URI so one URI shape works against every surface. The SDK
+    resolves resources by matching the full URI string, so the hint would
+    otherwise make every read fail with "Unknown resource". These surfaces
+    ignore the hint, so the query and fragment are stripped before lookup.
+    """
+
+    async def read_resource(self, uri: AnyUrl | str) -> Iterable[ReadResourceContents]:
+        base = str(uri).split("?", 1)[0].split("#", 1)[0]
+        return await super().read_resource(base)
+
+
 # The MCP server instance all tools register against.
-mcp = FastMCP(name="signal-cli")
+mcp = SignalMCPServer(name="signal-cli")
 register_prompts(mcp)
 
 # ---------------------------------------------------------------------------
