@@ -15,14 +15,19 @@ Four resource URIs are registered (two schemes × two surfaces):
 
 | URI | What it renders |
 |-----|-----------------|
-| `signal://conversations/a2ui` | Index of buffered conversations |
-| `mcp://signal/conversations/a2ui` | (same) |
-| `signal://conversation/{id}/a2ui` | One conversation thread |
-| `mcp://signal/conversation/{id}/a2ui` | (same) |
+| `signal://conversations/a2ui{?w}` | Index of buffered conversations |
+| `mcp://signal/conversations/a2ui{?w}` | (same) |
+| `signal://conversation/{id}/a2ui{?w}` | One conversation thread |
+| `mcp://signal/conversation/{id}/a2ui{?w}` | (same) |
 
 `{id}` is a phone number (E.164) or a Signal group id. Group ids are
 base64 and may contain `/` and `=`, so they **must be percent-encoded** in
 the URI.
+
+`{?w}` is the optional width hint A2UI hosts append uniformly to any `/a2ui`
+URI (`?w=112`). Both surfaces accept it and currently ignore it; the bare URI
+works identically. Declaring it makes every URI a template, so all four
+advertise under `resourceTemplates/list` rather than `resources/list`.
 
 All resources declare MIME `application/a2ui+json` and `audience: ["user"]`.
 The model's programmatic tools (`receive_message`, sends, reactions,

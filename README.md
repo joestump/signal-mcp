@@ -704,16 +704,23 @@ Four resource URIs are registered (two schemes × two surfaces):
 
 | URI | What it renders |
 |-----|-----------------|
-| `signal://conversations/a2ui` | Index of buffered conversations |
-| `mcp://signal/conversations/a2ui` | (same) |
-| `signal://conversation/{id}/a2ui` | One conversation thread |
-| `mcp://signal/conversation/{id}/a2ui` | (same) |
+| `signal://conversations/a2ui{?w}` | Index of buffered conversations |
+| `mcp://signal/conversations/a2ui{?w}` | (same) |
+| `signal://conversation/{id}/a2ui{?w}` | One conversation thread |
+| `mcp://signal/conversation/{id}/a2ui{?w}` | (same) |
 
 `{id}` is a phone number (E.164) or a Signal group id. Group ids are
 base64 and may contain `/` and `=`, so they **must be percent-encoded** in
 the URI. All resources declare MIME `application/a2ui+json` and
 `audience: ["user"]` — the model's programmatic tools (`receive_message`,
 sends, reactions, `mark_read`) are unchanged.
+
+`{?w}` is the optional width hint A2UI hosts append uniformly to any
+`/a2ui` URI (`?w=112`). Both surfaces accept it and currently ignore it;
+reading the bare URI without it works exactly the same. Because every URI
+declares it, all four advertise under `resourceTemplates/list` rather than
+`resources/list` — a host that enumerates only concrete resources will not
+see them.
 
 **History is in-memory, instance-local, and cleared on restart.** The
 buffer covers only traffic this server process observed during its own

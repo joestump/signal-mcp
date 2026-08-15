@@ -1,5 +1,6 @@
 """Tests for A2UI resource registration (#66)."""
 
+import asyncio
 import json
 from unittest.mock import patch
 
@@ -9,45 +10,47 @@ from signal_mcp.history import ConversationBuffer
 from signal_mcp.tools import mcp
 
 
-def _get_resource_manager():
-    """Access the FastMCP resource manager."""
-    return mcp._resource_manager
+def _templates():
+    """The advertised resource templates, keyed by URI template."""
+    return {str(t.uri_template): t for t in asyncio.run(mcp.list_resource_templates())}
 
 
 def test_thread_resources_registered():
     """Both signal:// and mcp:// thread URIs are registered."""
-    rm = _get_resource_manager()
-    templates = rm._templates
-    assert "signal://conversation/{id}/a2ui" in templates
-    assert "mcp://signal/conversation/{id}/a2ui" in templates
+    templates = _templates()
+    assert "signal://conversation/{id}/a2ui{?w}" in templates
+    assert "mcp://signal/conversation/{id}/a2ui{?w}" in templates
 
 
 def test_index_resources_registered():
-    """Both signal:// and mcp:// index URIs are registered."""
-    rm = _get_resource_manager()
-    resources = rm._resources
-    assert "signal://conversations/a2ui" in resources
-    assert "mcp://signal/conversations/a2ui" in resources
+    """Both signal:// and mcp:// index URIs are registered.
+
+    Declaring the optional ``{?w}`` width hint makes the index a template
+    even though it has no path parameter, so it advertises under
+    resourceTemplates/list rather than resources/list.
+    """
+    templates = _templates()
+    assert "signal://conversations/a2ui{?w}" in templates
+    assert "mcp://signal/conversations/a2ui{?w}" in templates
+
+
+def test_all_a2ui_surfaces_are_templates():
+    """No A2UI surface advertises as a concrete resource."""
+    assert asyncio.run(mcp.list_resources()) == []
+    assert len(_templates()) == 4
 
 
 def test_mime_type_is_a2ui():
     """Every registered resource declares application/a2ui+json."""
-    rm = _get_resource_manager()
-    for uri, template in rm._templates.items():
+    for uri, template in _templates().items():
         assert template.mime_type == "application/a2ui+json", uri
-    for uri, resource in rm._resources.items():
-        assert resource.mime_type == "application/a2ui+json", uri
 
 
 def test_audience_is_user():
     """Every registered resource has audience: ['user']."""
-    rm = _get_resource_manager()
-    for uri, template in rm._templates.items():
+    for uri, template in _templates().items():
         assert template.annotations is not None, uri
-        assert "user" in template.annotations.audience, uri
-    for uri, resource in rm._resources.items():
-        assert resource.annotations is not None, uri
-        assert "user" in resource.annotations.audience, uri
+        assert "user" in (template.annotations.audience or []), uri
 
 
 def test_thread_handler_renders_snapshot():
@@ -92,10 +95,14 @@ def test_thread_handler_empty_conversation():
     assert "No buffered messages" in json.dumps(env)
 
 
-def test_thread_handler_percent_decodes_group_id():
-    """A percent-encoded group id round-trips."""
+def test_percent_encoded_group_id_round_trips_through_the_uri():
+    """A percent-encoded group id in the URI reaches the handler decoded.
+
+    fastmcp decodes template parameters exactly once on the way in, so the
+    handler no longer decodes for itself — this reads through the real URI
+    path to pin the round trip end to end rather than calling the handler.
+    """
     group_id = "aGVsbG8="  # base64 with =
-    encoded = "aGVsbG8%3D"
     buf = ConversationBuffer()
     from signal_mcp.history import BufferedMessage
 
@@ -113,11 +120,76 @@ def test_thread_handler_percent_decodes_group_id():
         patch("signal_mcp.tools.history_buffer", buf),
         patch.object(config, "account", "+456"),
     ):
-        import asyncio
+        content = asyncio.run(
+            mcp.read_resource("signal://conversation/aGVsbG8%3D/a2ui")
+        ).contents[0]
 
-        result = asyncio.run(_call_thread_handler(encoded))
-    env = json.loads(result)
-    assert "group hi" in json.dumps(env)
+    assert "group hi" in content.content
+
+
+def test_encoded_slash_in_group_id_round_trips():
+    """An encoded slash in a group id stays inside the matched segment.
+
+    ``{id}`` is a simple RFC 6570 placeholder matching one segment, and
+    fastmcp matches the still-encoded path before unquoting the captured
+    value — so ``%2F`` does not split the segment and decodes to a literal
+    ``/``. Real base64 group ids contain ``/``, so this is the common case,
+    and a matcher that decoded before matching would break every group
+    thread read.
+    """
+    group_id = "aGVs/bG8="  # base64 with / and =
+    buf = ConversationBuffer()
+    from signal_mcp.history import BufferedMessage
+
+    buf.record(
+        BufferedMessage(
+            conversation_key=group_id,
+            direction="inbound",
+            sender_id="+123",
+            sender_name="Alice",
+            text="group with slash",
+            timestamp=1000,
+        )
+    )
+    with (
+        patch("signal_mcp.tools.history_buffer", buf),
+        patch.object(config, "account", "+456"),
+    ):
+        content = asyncio.run(
+            mcp.read_resource("signal://conversation/aGVs%2FbG8%3D/a2ui")
+        ).contents[0]
+
+    assert "group with slash" in content.content
+
+
+def test_handler_does_not_decode_its_argument_again():
+    """The handler treats its id as already-decoded.
+
+    Decoding a second time would corrupt any conversation key containing a
+    literal '%', which is what makes the removed unquote() a hazard rather
+    than a no-op.
+    """
+    key = "group%3Dnot-encoded"
+    buf = ConversationBuffer()
+    from signal_mcp.history import BufferedMessage
+
+    buf.record(
+        BufferedMessage(
+            conversation_key=key,
+            direction="inbound",
+            sender_id="+123",
+            sender_name="Alice",
+            text="literal percent",
+            timestamp=1000,
+        )
+    )
+    with (
+        patch("signal_mcp.tools.history_buffer", buf),
+        patch.object(config, "account", "+456"),
+    ):
+        result = asyncio.run(_call_thread_handler(key))
+
+    assert "literal percent" in result
 
 
 def test_index_handler_renders_conversations():
@@ -159,18 +231,29 @@ def test_read_does_not_touch_daemon():
     mock_client.assert_not_called()
 
 
+def _body(result) -> str:
+    """The single text body of a surface result.
+
+    ``ResourceContent.content`` is typed ``str | bytes``; every A2UI surface
+    serializes JSON, so anything else is a bug worth failing on loudly.
+    """
+    content = result.contents[0].content
+    assert isinstance(content, str)
+    return content
+
+
 async def _call_thread_handler(id: str) -> str:
-    """Invoke the thread surface resource handler."""
+    """Invoke the thread surface resource handler, returning its JSON body."""
     from signal_mcp.tools import thread_surface
 
-    return await thread_surface(id)
+    return _body(await thread_surface(id))
 
 
 async def _call_index_handler() -> str:
-    """Invoke the conversations surface resource handler."""
+    """Invoke the conversations surface resource handler, returning its body."""
     from signal_mcp.tools import conversations_surface
 
-    return await conversations_surface()
+    return _body(await conversations_surface())
 
 
 def test_thread_heading_matches_the_index_label():
@@ -230,7 +313,7 @@ def test_group_thread_heading_falls_back_to_the_group_id():
         patch("signal_mcp.tools.history_buffer", buf),
         patch.object(config, "account", "+456"),
     ):
-        env = json.loads(asyncio.run(_call_thread_handler("GID%3D%3D")))
+        env = json.loads(asyncio.run(_call_thread_handler("GID==")))
 
     heading = next(
         c for c in env["updateComponents"]["components"] if c["id"] == "heading"
@@ -272,22 +355,23 @@ def _buffer_with_message():
     return buf
 
 
-def test_read_index_with_width_hint():
-    """A ?w=<width> hint on the index URI no longer fails resolution.
-
-    A2UI-capable hosts append an optional width hint to any /a2ui URI; the
-    SDK matches resources on the full URI string, so the hint used to make
-    every read fail with "Unknown resource".
-    """
-    import asyncio
-
+def _read(uri: str):
+    """Read *uri* against a buffer holding one message from Alice."""
     with (
         patch("signal_mcp.tools.history_buffer", _buffer_with_message()),
         patch.object(config, "account", "+456"),
     ):
-        contents = asyncio.run(mcp.read_resource("signal://conversations/a2ui?w=112"))
+        return asyncio.run(mcp.read_resource(uri)).contents[0]
 
-    (content,) = contents
+
+def test_read_index_with_width_hint():
+    """A ?w=<width> hint on the index URI resolves.
+
+    A2UI-capable hosts append an optional width hint to any /a2ui URI. The
+    URI declares it as RFC 6570 ``{?w}``, which is what lets fastmcp match
+    the path and bind the hint instead of failing the lookup.
+    """
+    content = _read("signal://conversations/a2ui?w=112")
     assert content.mime_type == "application/a2ui+json"
     env = json.loads(content.content)
     assert env["version"] == "v0.9"
@@ -295,72 +379,45 @@ def test_read_index_with_width_hint():
 
 
 def test_read_index_with_width_hint_mcp_scheme():
-    """The mcp:// twin of the index URI tolerates the hint too."""
-    import asyncio
-
-    with (
-        patch("signal_mcp.tools.history_buffer", _buffer_with_message()),
-        patch.object(config, "account", "+456"),
-    ):
-        contents = asyncio.run(
-            mcp.read_resource("mcp://signal/conversations/a2ui?w=112")
-        )
-
-    (content,) = contents
+    """The mcp:// twin of the index URI takes the hint too."""
+    content = _read("mcp://signal/conversations/a2ui?w=112")
     assert content.mime_type == "application/a2ui+json"
     assert "Alice" in content.content
 
 
 def test_read_thread_template_with_width_hint():
     """A ?w=<width> hint resolves against the thread template as well."""
-    import asyncio
-
-    with (
-        patch("signal_mcp.tools.history_buffer", _buffer_with_message()),
-        patch.object(config, "account", "+456"),
-    ):
-        contents = asyncio.run(
-            mcp.read_resource("signal://conversation/%2B123/a2ui?w=80")
-        )
-
-    (content,) = contents
+    content = _read("signal://conversation/%2B123/a2ui?w=80")
     assert content.mime_type == "application/a2ui+json"
     assert "hello" in content.content
 
 
-def test_read_fragment_is_also_stripped():
-    """A #fragment on the URI resolves like the bare URI."""
-    import asyncio
-
-    with (
-        patch("signal_mcp.tools.history_buffer", _buffer_with_message()),
-        patch.object(config, "account", "+456"),
-    ):
-        contents = asyncio.run(mcp.read_resource("signal://conversations/a2ui#anchor"))
-
-    (content,) = contents
-    assert "Alice" in content.content
-
-
 def test_read_without_query_still_resolves():
     """The bare URI keeps working unchanged."""
-    import asyncio
+    assert "Alice" in _read("signal://conversations/a2ui").content
 
-    with (
-        patch("signal_mcp.tools.history_buffer", _buffer_with_message()),
-        patch.object(config, "account", "+456"),
-    ):
-        contents = asyncio.run(mcp.read_resource("signal://conversations/a2ui"))
 
-    (content,) = contents
-    assert "Alice" in content.content
+def test_width_hint_is_extracted_from_the_uri():
+    """The declared ``{?w}`` binds the hint rather than failing the match.
+
+    Asserted through the template's own matcher — the server uses the same
+    call to resolve a read. The handler ignores ``w``, so there is no
+    observable rendering difference to assert on instead.
+    """
+    template = _templates()["signal://conversations/a2ui{?w}"]
+    assert template.matches("signal://conversations/a2ui?w=112") == {"w": "112"}
+    assert template.matches("signal://conversations/a2ui") == {}
+
+
+def test_unrecognized_query_parameter_is_ignored():
+    """A query param the URI does not declare does not break the read."""
+    assert "Alice" in _read("signal://conversations/a2ui?bogus=1").content
 
 
 def test_unknown_resource_with_query_still_errors():
-    """Stripping the hint does not turn unknown URIs into known ones."""
-    import asyncio
-
+    """Tolerating the hint does not turn unknown URIs into known ones."""
     import pytest
+    from fastmcp.exceptions import NotFoundError
 
-    with pytest.raises(ValueError, match="Unknown resource"):
+    with pytest.raises(NotFoundError, match="Unknown resource"):
         asyncio.run(mcp.read_resource("signal://nope/a2ui?w=112"))

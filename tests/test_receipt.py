@@ -10,6 +10,7 @@ import pytest
 from signal_mcp import rpc
 from signal_mcp.rpc import SignalCLIError
 from signal_mcp.tools import _send_receipt, mark_read
+from tests.helpers import run_tool
 
 OTHER = "+11234567890"
 TIMESTAMP = 1744185565466
@@ -91,20 +92,20 @@ def test_mark_read_success(monkeypatch):
     fake = FakeClient()
     monkeypatch.setattr(rpc, "client", fake)
 
-    result = asyncio.run(mark_read(OTHER, TIMESTAMP))
+    result = run_tool(mark_read(OTHER, TIMESTAMP))
     assert result == {"message": "Read receipt sent"}
 
 
 def test_mark_read_missing_sender():
     """mark_read raises when sender is empty."""
     with pytest.raises(ValueError):
-        asyncio.run(mark_read("", TIMESTAMP))
+        run_tool(mark_read("", TIMESTAMP))
 
 
 def test_mark_read_missing_timestamp():
     """mark_read raises when timestamp is 0 (falsy)."""
     with pytest.raises(ValueError):
-        asyncio.run(mark_read(OTHER, 0))
+        run_tool(mark_read(OTHER, 0))
 
 
 def test_mark_read_daemon_error(monkeypatch):
@@ -112,4 +113,4 @@ def test_mark_read_daemon_error(monkeypatch):
     monkeypatch.setattr(rpc, "client", FailingClient())
 
     with pytest.raises(SignalCLIError):
-        asyncio.run(mark_read(OTHER, TIMESTAMP))
+        run_tool(mark_read(OTHER, TIMESTAMP))

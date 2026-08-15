@@ -8,7 +8,6 @@ explicit mode overrides, RFC 2397 encoding round-trips, the size cap, and
 data: passthrough in every mode.
 """
 
-import asyncio
 import base64
 import dataclasses
 import os
@@ -35,6 +34,7 @@ from signal_mcp.tools import (
     send_message_to_group,
     send_message_to_user,
 )
+from tests.helpers import run_tool
 
 ALICE = "+15555550101"
 MALLORY = "+15555550199"
@@ -155,7 +155,7 @@ def test_send_message_to_user_includes_attachments(fake, tmp_path):
     f = tmp_path / "photo.png"
     f.write_bytes(b"png")
 
-    result = asyncio.run(send_message_to_user("look", ALICE, [str(f)]))
+    result = run_tool(send_message_to_user("look", ALICE, [str(f)]))
 
     assert result == {"message": "Message sent successfully"}
     params = _send_params(fake)
@@ -165,7 +165,7 @@ def test_send_message_to_user_includes_attachments(fake, tmp_path):
 
 
 def test_send_message_to_user_without_attachments_omits_key(fake):
-    asyncio.run(send_message_to_user("hi", ALICE))
+    run_tool(send_message_to_user("hi", ALICE))
     assert "attachments" not in _send_params(fake)
 
 
@@ -174,7 +174,7 @@ def test_send_message_to_user_attachment_only(fake, tmp_path):
     f = tmp_path / "photo.png"
     f.write_bytes(b"png")
 
-    result = asyncio.run(send_message_to_user("", ALICE, [str(f)]))
+    result = run_tool(send_message_to_user("", ALICE, [str(f)]))
 
     assert result == {"message": "Message sent successfully"}
     params = _send_params(fake)
@@ -183,14 +183,14 @@ def test_send_message_to_user_attachment_only(fake, tmp_path):
 
 
 def test_send_message_to_user_data_uri_passthrough(fake):
-    asyncio.run(send_message_to_user("pic", ALICE, [DATA_URI]))
+    run_tool(send_message_to_user("pic", ALICE, [DATA_URI]))
     assert _send_params(fake)["attachments"] == [DATA_URI]
 
 
 def test_send_message_to_user_invalid_path_raises_before_rpc(fake, tmp_path):
     """Path validation failure errors out before any RPC is issued."""
     with pytest.raises(SignalError, match="not an existing file"):
-        asyncio.run(send_message_to_user("hi", ALICE, [str(tmp_path / "nope.png")]))
+        run_tool(send_message_to_user("hi", ALICE, [str(tmp_path / "nope.png")]))
 
     assert fake.calls == []
 
@@ -199,7 +199,7 @@ def test_send_message_to_group_includes_attachments(fake, tmp_path):
     f = tmp_path / "photo.png"
     f.write_bytes(b"png")
 
-    result = asyncio.run(send_message_to_group("look", GROUP_NAME, [str(f)]))
+    result = run_tool(send_message_to_group("look", GROUP_NAME, [str(f)]))
 
     assert result == {"message": "Message sent successfully"}
     params = _send_params(fake)
@@ -209,7 +209,7 @@ def test_send_message_to_group_includes_attachments(fake, tmp_path):
 
 def test_send_message_to_group_invalid_path_raises_before_send(fake, tmp_path):
     with pytest.raises(SignalError, match="not an existing file"):
-        asyncio.run(send_message_to_group("hi", GROUP, [str(tmp_path / "nope.png")]))
+        run_tool(send_message_to_group("hi", GROUP, [str(tmp_path / "nope.png")]))
 
     assert all(method != "send" for method, _ in fake.calls)
 
@@ -218,7 +218,7 @@ def test_send_includes_attachments(fake, tmp_path):
     f = tmp_path / "photo.png"
     f.write_bytes(b"png")
 
-    result = asyncio.run(send("look", [str(f)]))
+    result = run_tool(send("look", [str(f)]))
 
     assert result == {"message": "Message sent successfully"}
     params = _send_params(fake)
@@ -228,7 +228,7 @@ def test_send_includes_attachments(fake, tmp_path):
 
 def test_send_invalid_path_raises_before_rpc(fake, tmp_path):
     with pytest.raises(SignalError, match="not an existing file"):
-        asyncio.run(send("hi", [str(tmp_path / "nope.png")]))
+        run_tool(send("hi", [str(tmp_path / "nope.png")]))
 
     assert fake.calls == []
 
@@ -251,7 +251,7 @@ def test_untrusted_user_blocks_before_attachment_validation(fake, monkeypatch):
     monkeypatch.setattr(tools, "_validate_attachments", spy)
 
     with pytest.raises(UntrustedRecipientError):
-        asyncio.run(send_message_to_user("hi", MALLORY, ["/does/not/exist.png"]))
+        run_tool(send_message_to_user("hi", MALLORY, ["/does/not/exist.png"]))
 
     assert validated is False
     assert fake.calls == []
@@ -269,7 +269,7 @@ def test_untrusted_group_blocks_before_attachment_validation(fake, monkeypatch):
     monkeypatch.setattr(tools, "_validate_attachments", spy)
 
     with pytest.raises(UntrustedRecipientError):
-        asyncio.run(send_message_to_group("hi", GROUP, ["/does/not/exist.png"]))
+        run_tool(send_message_to_group("hi", GROUP, ["/does/not/exist.png"]))
 
     assert validated is False
     assert all(method != "send" for method, _ in fake.calls)
@@ -330,7 +330,7 @@ def test_data_uri_encode_round_trip(fake, monkeypatch, tmp_path):
     f = tmp_path / "photo.png"
     f.write_bytes(payload)
 
-    asyncio.run(send_message_to_user("pic", ALICE, [str(f)]))
+    run_tool(send_message_to_user("pic", ALICE, [str(f)]))
 
     (uri,) = _send_params(fake)["attachments"]
     header, b64data = uri.split(",", 1)
@@ -345,7 +345,7 @@ def test_data_uri_unknown_extension_falls_back_to_octet_stream(
     f = tmp_path / "blob.zzz987"
     f.write_bytes(b"opaque")
 
-    asyncio.run(send_message_to_user("blob", ALICE, [str(f)]))
+    run_tool(send_message_to_user("blob", ALICE, [str(f)]))
 
     (uri,) = _send_params(fake)["attachments"]
     assert uri.startswith("data:application/octet-stream;filename=blob.zzz987;base64,")
@@ -357,7 +357,7 @@ def test_auto_mode_remote_host_encodes_file(fake, monkeypatch, tmp_path):
     f = tmp_path / "note.txt"
     f.write_text("hello")
 
-    asyncio.run(send("here", [str(f)]))
+    run_tool(send("here", [str(f)]))
 
     (uri,) = _send_params(fake)["attachments"]
     assert uri.startswith("data:text/plain;filename=note.txt;base64,")
@@ -370,7 +370,7 @@ def test_explicit_path_mode_sends_path_to_remote_host(fake, monkeypatch, tmp_pat
     f = tmp_path / "photo.png"
     f.write_bytes(b"png")
 
-    asyncio.run(send_message_to_user("look", ALICE, [str(f)]))
+    run_tool(send_message_to_user("look", ALICE, [str(f)]))
 
     assert _send_params(fake)["attachments"] == [str(f.resolve())]
 
@@ -383,7 +383,7 @@ def test_cap_exceeded_raises_before_rpc(fake, monkeypatch, tmp_path):
     f.write_bytes(b"x" * 11)
 
     with pytest.raises(SignalError) as exc:
-        asyncio.run(send_message_to_user("hi", ALICE, [str(f)]))
+        run_tool(send_message_to_user("hi", ALICE, [str(f)]))
 
     message = str(exc.value)
     assert "big.bin" in message
@@ -399,7 +399,7 @@ def test_cap_boundary_file_is_allowed(fake, monkeypatch, tmp_path):
     f = tmp_path / "ok.bin"
     f.write_bytes(b"x" * 10)
 
-    asyncio.run(send_message_to_user("hi", ALICE, [str(f)]))
+    run_tool(send_message_to_user("hi", ALICE, [str(f)]))
 
     (uri,) = _send_params(fake)["attachments"]
     assert base64.b64decode(uri.split(",", 1)[1]) == b"x" * 10
@@ -411,7 +411,7 @@ def test_cap_not_enforced_in_path_mode(fake, monkeypatch, tmp_path):
     f = tmp_path / "big.bin"
     f.write_bytes(b"x" * 100)
 
-    asyncio.run(send_message_to_user("hi", ALICE, [str(f)]))
+    run_tool(send_message_to_user("hi", ALICE, [str(f)]))
 
     assert _send_params(fake)["attachments"] == [str(f.resolve())]
 
@@ -452,7 +452,7 @@ def test_data_uri_hostile_basenames_round_trip(fake, monkeypatch, tmp_path, name
     f = tmp_path / name
     f.write_bytes(payload)
 
-    asyncio.run(send_message_to_user("f", ALICE, [str(f)]))
+    run_tool(send_message_to_user("f", ALICE, [str(f)]))
 
     (uri,) = _send_params(fake)["attachments"]
     header, b64data = uri.split(",", 1)
@@ -486,7 +486,7 @@ def test_caller_data_uri_passthrough_in_every_mode(fake, monkeypatch, mode, host
     monkeypatch.setattr(config, "attachment_transfer", mode)
     monkeypatch.setattr(config, "rpc_host", host)
 
-    asyncio.run(send_message_to_user("pic", ALICE, [DATA_URI]))
+    run_tool(send_message_to_user("pic", ALICE, [DATA_URI]))
 
     assert _send_params(fake)["attachments"] == [DATA_URI]
 
@@ -497,7 +497,7 @@ def test_mixed_entries_in_data_uri_mode(fake, monkeypatch, tmp_path):
     f = tmp_path / "a.txt"
     f.write_text("hi")
 
-    asyncio.run(send_message_to_user("both", ALICE, [DATA_URI, str(f)]))
+    run_tool(send_message_to_user("both", ALICE, [DATA_URI, str(f)]))
 
     first, second = _send_params(fake)["attachments"]
     assert first == DATA_URI
