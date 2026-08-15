@@ -31,6 +31,7 @@ from signal_mcp.rpc import (
     SignalRpcClient,
 )
 from signal_mcp.tools import receive_message
+from tests.helpers import run_tool
 
 
 # ---------------------------------------------------------------------------
@@ -410,7 +411,7 @@ def test_receive_message_refuses_in_channel_mode(monkeypatch):
     monkeypatch.setattr(config, "channel_mode", True)
 
     with pytest.raises(SignalError, match="channel mode"):
-        asyncio.run(receive_message(timeout=0))
+        run_tool(receive_message(timeout=0))
 
 
 def test_receive_message_allowed_when_not_channel_mode(monkeypatch):
@@ -422,7 +423,7 @@ def test_receive_message_allowed_when_not_channel_mode(monkeypatch):
             return None
 
     monkeypatch.setattr(rpc, "client", IdleClient())
-    result = asyncio.run(receive_message(timeout=0))
+    result = run_tool(receive_message(timeout=0))
     assert isinstance(result, MessageResponse)
     assert result.message is None
 
@@ -616,4 +617,4 @@ def test_send_to_group_errors_when_listgroups_fails(monkeypatch):
 
     monkeypatch.setattr(rpc, "client", FailingGroups())
     with pytest.raises(SignalError, match="Could not find group"):
-        asyncio.run(send_message_to_group("hi", "some-group"))
+        run_tool(send_message_to_group("hi", "some-group"))

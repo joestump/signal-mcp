@@ -14,16 +14,15 @@ import shutil
 import tempfile
 import urllib.error
 import urllib.request
-from collections.abc import AsyncIterator, Awaitable, Callable, Iterable
+from collections.abc import AsyncIterator, Awaitable, Callable
 from email.message import EmailMessage
 from pathlib import Path
 from typing import Any, ParamSpec, TypeVar
 from urllib.parse import quote, unquote, urlsplit
 
-from mcp.server.fastmcp import FastMCP
-from mcp.server.lowlevel.helper_types import ReadResourceContents
+from fastmcp import FastMCP
+from fastmcp.resources import ResourceContent, ResourceResult
 from mcp.types import Annotations
-from pydantic import AnyUrl
 
 from signal_mcp import a2ui, s3
 from signal_mcp.config import _normalize_recipient, config, is_trusted_sender
@@ -46,23 +45,8 @@ from signal_mcp.rpc import (
 logger = logging.getLogger(__name__)
 
 
-class SignalMCPServer(FastMCP):
-    """FastMCP server whose resource reads tolerate query strings on URIs.
-
-    A2UI-capable hosts append an optional ``?w=<width>`` hint to any ``/a2ui``
-    resource URI so one URI shape works against every surface. The SDK
-    resolves resources by matching the full URI string, so the hint would
-    otherwise make every read fail with "Unknown resource". These surfaces
-    ignore the hint, so the query and fragment are stripped before lookup.
-    """
-
-    async def read_resource(self, uri: AnyUrl | str) -> Iterable[ReadResourceContents]:
-        base = str(uri).split("?", 1)[0].split("#", 1)[0]
-        return await super().read_resource(base)
-
-
 # The MCP server instance all tools register against.
-mcp = SignalMCPServer(name="signal-cli")
+mcp = FastMCP(name="signal-cli")
 register_prompts(mcp)
 
 # ---------------------------------------------------------------------------
@@ -74,7 +58,39 @@ register_prompts(mcp)
 # gets rendered surfaces. Handlers take a synchronous snapshot from the
 # buffer and render; they never call the daemon, which makes "reading MUST
 # NOT mutate state" trivially true.
+#
+# Every URI declares the optional width hint as RFC 6570 ``{?w}``. A2UI hosts
+# append ``?w=<width>`` uniformly to any /a2ui URI, and declaring it is what
+# makes the read resolve — fastmcp matches the path against the template and
+# binds declared query params (coercing ``w`` to int), while an undeclared
+# query would fail the lookup outright. Neither renderer lays out to a width
+# yet, so ``w`` is accepted and ignored rather than threaded through.
+#
+# Declaring {?w} makes even the no-path-parameter index a template, so all
+# four advertise under resourceTemplates/list rather than resources/list.
 # ---------------------------------------------------------------------------
+
+
+A2UI_MIME = "application/a2ui+json"
+
+
+def _a2ui_result(env: dict[str, Any]) -> ResourceResult:
+    """Serialize *env* as an A2UI resource result with an explicit MIME type.
+
+    The MIME type is stated on the content rather than left to the ``mime_type``
+    declared on the registration: fastmcp 3.4.7's
+    ``ResourceTemplate.convert_result`` builds the result without forwarding the
+    template's declared type, so a handler returning a bare ``str`` reaches the
+    host as ``text/plain``. (The concrete-``Resource`` path does forward it — the
+    template override is what drops it.) A2UI hosts key off the MIME type to
+    decide whether to render a surface, so falling back would silently turn every
+    surface back into plain text. Returning a ``ResourceResult`` passes through
+    ``convert_result`` untouched, which is correct either way and stays correct
+    once the upstream gap closes.
+    """
+    return ResourceResult(
+        [ResourceContent(content=json.dumps(env), mime_type=A2UI_MIME)]
+    )
 
 
 def _conversation_label(key: str) -> str:
@@ -92,47 +108,49 @@ def _conversation_label(key: str) -> str:
 
 
 @mcp.resource(
-    "signal://conversation/{id}/a2ui",
-    mime_type="application/a2ui+json",
+    "signal://conversation/{id}/a2ui{?w}",
+    mime_type=A2UI_MIME,
     annotations=Annotations(audience=["user"]),
 )
 @mcp.resource(
-    "mcp://signal/conversation/{id}/a2ui",
-    mime_type="application/a2ui+json",
+    "mcp://signal/conversation/{id}/a2ui{?w}",
+    mime_type=A2UI_MIME,
     annotations=Annotations(audience=["user"]),
 )
-async def thread_surface(id: str) -> str:
+async def thread_surface(id: str, w: int | None = None) -> ResourceResult:
     """Render a chat-thread surface for one conversation."""
-    decoded = unquote(id)
+    # fastmcp percent-decodes template parameters exactly once, so a
+    # conversation key arrives ready to use; decoding again here would
+    # corrupt any key containing a literal '%'.
     try:
-        messages = history_buffer.snapshot(decoded)
+        messages = history_buffer.snapshot(id)
         env = a2ui.render_thread(
-            conversation_id=decoded,
-            label=_conversation_label(decoded),
+            conversation_id=id,
+            label=_conversation_label(id),
             messages=messages,
             account=config.account,
         )
-        return json.dumps(env)
+        return _a2ui_result(env)
     except Exception as e:
         raise SignalError(f"failed to render thread surface: {e}") from e
 
 
 @mcp.resource(
-    "signal://conversations/a2ui",
-    mime_type="application/a2ui+json",
+    "signal://conversations/a2ui{?w}",
+    mime_type=A2UI_MIME,
     annotations=Annotations(audience=["user"]),
 )
 @mcp.resource(
-    "mcp://signal/conversations/a2ui",
-    mime_type="application/a2ui+json",
+    "mcp://signal/conversations/a2ui{?w}",
+    mime_type=A2UI_MIME,
     annotations=Annotations(audience=["user"]),
 )
-async def conversations_surface() -> str:
+async def conversations_surface(w: int | None = None) -> ResourceResult:
     """Render the conversation index surface."""
     try:
         summaries = history_buffer.conversations()
         env = a2ui.render_index(summaries=summaries)
-        return json.dumps(env)
+        return _a2ui_result(env)
     except Exception as e:
         raise SignalError(f"failed to render index surface: {e}") from e
 

@@ -18,6 +18,7 @@ from signal_mcp.tools import (
     send_reaction_to_group,
     send_reaction_to_user,
 )
+from tests.helpers import run_tool
 
 ACCOUNT = "+15551234567"
 OTHER = "+11234567890"
@@ -77,7 +78,7 @@ def test_send_returns_same_shape():
         patch.object(config, "trusted_recipients", frozenset()),
         _isolated_buffer(),
     ):
-        result = asyncio.run(send("hello"))
+        result = run_tool(send("hello"))
     assert result == {"message": "Message sent successfully"}
 
 
@@ -88,7 +89,7 @@ def test_send_message_to_user_returns_same_shape():
         patch.object(config, "trusted_recipients", frozenset()),
         _isolated_buffer(),
     ):
-        result = asyncio.run(send_message_to_user("hi", OTHER))
+        result = run_tool(send_message_to_user("hi", OTHER))
     assert result == {"message": "Message sent successfully"}
 
 
@@ -105,7 +106,7 @@ def test_send_message_to_group_returns_same_shape():
             return {"id": "GID==", "name": name}
 
         with patch("signal_mcp.tools._resolve_group", fake_resolve):
-            result = asyncio.run(send_message_to_group("hi", "GID=="))
+            result = run_tool(send_message_to_group("hi", "GID=="))
     assert result == {"message": "Message sent successfully"}
 
 
@@ -116,7 +117,7 @@ def test_send_reaction_to_user_returns_same_shape():
         patch.object(config, "trusted_recipients", frozenset()),
         _isolated_buffer(),
     ):
-        result = asyncio.run(send_reaction_to_user("\U0001f44d", OTHER, OTHER, 1000))
+        result = run_tool(send_reaction_to_user("\U0001f44d", OTHER, OTHER, 1000))
     assert result == {"message": "Reaction sent successfully"}
 
 
@@ -132,7 +133,7 @@ def test_send_reaction_to_group_returns_same_shape():
             return {"id": "GID==", "name": name}
 
         with patch("signal_mcp.tools._resolve_group", fake_resolve):
-            result = asyncio.run(
+            result = run_tool(
                 send_reaction_to_group("\U0001f44d", "GID==", OTHER, 1000)
             )
     assert result == {"message": "Reaction sent successfully"}
@@ -148,7 +149,7 @@ def test_receive_message_returns_message_response():
         patch.object(config, "trusted_senders", frozenset()),
         patch.object(config, "channel_mode", False),
     ):
-        result = asyncio.run(receive_message(timeout=1))
+        result = run_tool(receive_message(timeout=1))
     assert isinstance(result, MessageResponse)
     assert result.message == "hello"
 
@@ -158,7 +159,7 @@ def test_mark_read_returns_same_shape():
     with (
         patch.object(rpc, "client", fake),
     ):
-        result = asyncio.run(mark_read(OTHER, 1000))
+        result = run_tool(mark_read(OTHER, 1000))
     assert result == {"message": "Read receipt sent"}
 
 
@@ -166,15 +167,11 @@ def test_a2ui_resources_have_audience_user():
     """A2UI resources declare audience: ['user'] while tools do not."""
     from signal_mcp.tools import mcp
 
-    rm = mcp._resource_manager
-    for uri, template in rm._templates.items():
+    for template in asyncio.run(mcp.list_resource_templates()):
+        uri = str(template.uri_template)
         assert template.annotations is not None, uri
         assert template.annotations.audience is not None, uri
         assert "user" in template.annotations.audience, uri
-    for uri, resource in rm._resources.items():
-        assert resource.annotations is not None, uri
-        assert resource.annotations.audience is not None, uri
-        assert "user" in resource.annotations.audience, uri
 
 
 def test_no_resources_host_path_unchanged():
@@ -188,8 +185,8 @@ def test_no_resources_host_path_unchanged():
         _isolated_buffer() as buf,
     ):
         # Exercise send + send_message_to_user — both should work.
-        r1 = asyncio.run(send("text me"))
-        r2 = asyncio.run(send_message_to_user("hi", OTHER))
+        r1 = run_tool(send("text me"))
+        r2 = run_tool(send_message_to_user("hi", OTHER))
         # Both sends landed in *this* buffer, which is what makes the
         # isolation real rather than decorative.
         assert sum(len(buf.snapshot(k)) for k in buf.conversation_keys()) == 2
@@ -215,7 +212,7 @@ def test_compat_tests_do_not_pollute_the_global_buffer():
         patch.object(config, "trusted_recipients", frozenset()),
         _isolated_buffer(),
     ):
-        asyncio.run(send_message_to_user("hi", OTHER))
+        run_tool(send_message_to_user("hi", OTHER))
     after = sum(
         len(history.buffer.snapshot(k)) for k in history.buffer.conversation_keys()
     )

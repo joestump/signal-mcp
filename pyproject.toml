@@ -8,6 +8,10 @@ license = "MIT"
 license-files = ["LICENSE"]
 dependencies = [
     "anyio>=4.0.0",
+    "fastmcp>=3.4.7,<4",
+    # fastmcp vendors nothing — it builds on the official SDK, which
+    # signal_mcp.channel imports directly (mcp.server.stdio, mcp.types).
+    # Declared explicitly rather than leaned on transitively.
     "mcp>=1.29.0,<2",
 ]
 

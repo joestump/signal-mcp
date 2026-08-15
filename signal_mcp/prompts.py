@@ -22,12 +22,11 @@ prompts directory as a parameter instead of reading the global config.
 
 import logging
 import re
-from collections.abc import Callable
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Any
 
-from mcp.server.fastmcp import FastMCP
-from mcp.server.fastmcp.prompts.base import Prompt, PromptArgument, UserMessage
+from fastmcp import FastMCP
+from fastmcp.prompts import Prompt, PromptArgument
 from pydantic import Field
 
 logger = logging.getLogger(__name__)
@@ -68,9 +67,9 @@ def register_prompts(mcp: FastMCP) -> None:
             "and bare https:// URLs."
         ),
     )
-    def signal_style() -> UserMessage:
+    def signal_style() -> str:
         """Return the Signal formatting rules as a user-role message."""
-        return UserMessage(SIGNAL_FORMATTING_RULES)
+        return SIGNAL_FORMATTING_RULES
 
     @mcp.prompt(
         name="signal_reply",
@@ -88,9 +87,9 @@ def register_prompts(mcp: FastMCP) -> None:
             str,
             Field(description="The Signal message text being replied to"),
         ],
-    ) -> UserMessage:
+    ) -> str:
         """Render the reply-composition template for a received message."""
-        return UserMessage(
+        return (
             f"Compose a reply to {sender} responding to their Signal message "
             f"below, following the Signal formatting rules. Then send the "
             f"reply with the send_message_to_user tool, using "
@@ -242,42 +241,56 @@ def _build_arguments(raw_arguments: list[dict[str, str]]) -> list[PromptArgument
     return arguments
 
 
-def _make_render_fn(body: str, argument_names: list[str]) -> Callable[..., UserMessage]:
-    """Build a prompts/get renderer substituting args into ``{placeholders}``.
+class FilePrompt(Prompt):
+    """A prompt whose body comes from a ``*.md`` file, rendered by substitution.
 
-    Only declared arguments are substituted; a placeholder for an optional
-    argument that was not provided is left as-is. Missing *required* arguments
-    never reach this function — ``Prompt.render`` rejects them first because
-    the prompt declares its arguments.
+    Implemented as a ``Prompt`` subclass rather than a function-backed prompt
+    because a file prompt's arguments are known only at load time. fastmcp
+    renders a function-backed prompt by introspecting the callable's signature
+    and dropping any argument it does not name, so a ``**kwargs`` renderer
+    built from parsed frontmatter would silently receive nothing and leave
+    every placeholder unsubstituted. Overriding :meth:`render` sidesteps
+    signature introspection entirely.
     """
 
-    def render(**arguments: str) -> UserMessage:
-        text = body
-        for name in argument_names:
-            if name in arguments:
-                text = text.replace("{" + name + "}", str(arguments[name]))
-        return UserMessage(text)
+    body: str
 
-    return render
+    async def render(self, arguments: dict[str, Any] | None = None) -> str:
+        """Substitute declared arguments into the body's ``{placeholders}``.
+
+        Only declared arguments are substituted; a placeholder for an optional
+        argument that was not provided is left as-is. Returning ``str`` lets
+        fastmcp wrap the result as a single user-role message.
+        """
+        provided = arguments or {}
+        declared = self.arguments or []
+        missing = {a.name for a in declared if a.required} - set(provided)
+        if missing:
+            raise ValueError(f"Missing required arguments: {sorted(missing)}")
+        text = self.body
+        for argument in declared:
+            if argument.name in provided:
+                text = text.replace(
+                    "{" + argument.name + "}", str(provided[argument.name])
+                )
+        return text
 
 
-def _prompt_from_file(path: Path) -> Prompt:
-    """Parse one ``*.md`` prompt file into a FastMCP ``Prompt``."""
+def _prompt_from_file(path: Path) -> FilePrompt:
+    """Parse one ``*.md`` prompt file into a :class:`FilePrompt`."""
     frontmatter_lines, body = _split_frontmatter(path.read_text(encoding="utf-8"))
     fields, raw_arguments = _parse_frontmatter(frontmatter_lines)
     if not body:
         raise PromptFileError("prompt body is empty")
-    arguments = _build_arguments(raw_arguments)
-    # title and context_kwarg declare their defaults positionally
-    # (Field(None, ...)), which mypy's pydantic plugin does not register as
-    # defaults — pass them explicitly to keep the call checkable.
-    return Prompt(
+    # title declares its default positionally (Field(None, ...)), which mypy's
+    # pydantic plugin does not register as a default — pass it explicitly to
+    # keep the call checkable.
+    return FilePrompt(
         name=fields.get("name", path.stem),
         title=None,
         description=fields.get("description"),
-        arguments=arguments,
-        fn=_make_render_fn(body, [argument.name for argument in arguments]),
-        context_kwarg=None,
+        arguments=_build_arguments(raw_arguments),
+        body=body,
     )
 
 

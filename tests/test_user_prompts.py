@@ -6,7 +6,8 @@ import logging
 from pathlib import Path
 
 import pytest
-from mcp.server.fastmcp import FastMCP
+from fastmcp import FastMCP
+from fastmcp.exceptions import PromptError
 from mcp.types import TextContent
 
 from signal_mcp.config import config, parse_args
@@ -50,7 +51,7 @@ def _get_prompt_text(
     mcp: FastMCP, name: str, arguments: dict[str, str] | None = None
 ) -> str:
     """Render a prompt and return the text of its single user message."""
-    result = asyncio.run(mcp.get_prompt(name, arguments))
+    result = asyncio.run(mcp.render_prompt(name, arguments))
     assert len(result.messages) == 1
     message = result.messages[0]
     assert message.role == "user"
@@ -126,13 +127,17 @@ def test_missing_optional_argument_leaves_placeholder(tmp_path: Path) -> None:
 
 
 def test_missing_required_argument_is_an_error(tmp_path: Path) -> None:
-    """prompts/get without a required argument raises an MCP error."""
+    """prompts/get without a required argument raises an MCP error.
+
+    fastmcp wraps whatever the renderer raises in ``PromptError``, so the
+    ValueError from :meth:`FilePrompt.render` surfaces under that type.
+    """
     (tmp_path / "respond-to-chelsea.md").write_text(VALID_PROMPT)
     mcp = _make_mcp()
     load_user_prompts(mcp, tmp_path)
 
-    with pytest.raises(ValueError, match="Missing required arguments"):
-        asyncio.run(mcp.get_prompt("respond-to-chelsea", {"tone": "warm"}))
+    with pytest.raises(PromptError, match="Missing required arguments"):
+        asyncio.run(mcp.render_prompt("respond-to-chelsea", {"tone": "warm"}))
 
 
 def test_name_defaults_to_file_stem(tmp_path: Path) -> None:

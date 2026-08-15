@@ -13,6 +13,7 @@ from signal_mcp.tools import (
     send_reaction_to_group,
     send_reaction_to_user,
 )
+from tests.helpers import run_tool
 
 ALICE = "+15555550101"
 MALLORY = "+15555550199"
@@ -79,7 +80,7 @@ def test_send_message_to_user_blocks_untrusted(monkeypatch):
     monkeypatch.setattr(config, "trusted_recipients", frozenset({ALICE}))
 
     with pytest.raises(UntrustedRecipientError) as excinfo:
-        asyncio.run(send_message_to_user("hi", MALLORY))
+        run_tool(send_message_to_user("hi", MALLORY))
 
     assert MALLORY in str(excinfo.value)
     assert called is False  # never asked the daemon to send
@@ -94,7 +95,7 @@ def test_send_message_to_user_allows_trusted(monkeypatch):
     monkeypatch.setattr(tools, "_send_message", fake_send)
     monkeypatch.setattr(config, "trusted_recipients", frozenset({ALICE}))
 
-    result = asyncio.run(send_message_to_user("hi", ALICE))
+    result = run_tool(send_message_to_user("hi", ALICE))
 
     assert result == {"message": "Message sent successfully"}
     assert sent["target"] == ALICE
@@ -111,9 +112,7 @@ def test_send_reaction_to_user_blocks_untrusted(monkeypatch):
     monkeypatch.setattr(config, "trusted_recipients", frozenset({ALICE}))
 
     with pytest.raises(UntrustedRecipientError):
-        asyncio.run(
-            send_reaction_to_user("\U0001f44d", MALLORY, MALLORY, 1782554453770)
-        )
+        run_tool(send_reaction_to_user("\U0001f44d", MALLORY, MALLORY, 1782554453770))
 
     assert called is False
 
@@ -135,7 +134,7 @@ def test_send_message_to_group_blocks_untrusted(monkeypatch):
     monkeypatch.setattr(config, "trusted_recipients", frozenset({GROUP}))
 
     with pytest.raises(UntrustedRecipientError):
-        asyncio.run(send_message_to_group("hi", "OTHER_GID=="))
+        run_tool(send_message_to_group("hi", "OTHER_GID=="))
 
     assert sent is False  # never asked the daemon to send
 
@@ -164,7 +163,7 @@ def test_send_message_to_group_allows_trusted(monkeypatch):
     monkeypatch.setattr(tools, "_send_message", fake_send)
     monkeypatch.setattr(config, "trusted_recipients", frozenset({GROUP}))
 
-    result = asyncio.run(send_message_to_group("hi", GROUP))
+    result = run_tool(send_message_to_group("hi", GROUP))
 
     assert result == {"message": "Message sent successfully"}
     assert sent == {"target": GROUP, "is_group": True}
@@ -197,7 +196,7 @@ def test_group_allowlisted_by_id_send_by_name(monkeypatch):
     monkeypatch.setattr(tools, "_send_message", fake_send)
     monkeypatch.setattr(config, "trusted_recipients", frozenset({GROUP}))
 
-    result = asyncio.run(send_message_to_group("hi", GROUP_NAME))
+    result = run_tool(send_message_to_group("hi", GROUP_NAME))
 
     assert result == {"message": "Message sent successfully"}
     assert sent["target"] == GROUP  # resolved to the internal id
@@ -219,7 +218,7 @@ def test_send_reaction_to_group_blocks_untrusted(monkeypatch):
     monkeypatch.setattr(config, "trusted_recipients", frozenset({GROUP}))
 
     with pytest.raises(UntrustedRecipientError):
-        asyncio.run(
+        run_tool(
             send_reaction_to_group("\U0001f44d", "OTHER_GID==", MALLORY, 1782554453770)
         )
 

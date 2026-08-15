@@ -27,6 +27,7 @@ from signal_mcp.tools import (
     _resolve_download_name,
     send_message_to_user,
 )
+from tests.helpers import run_tool
 
 ALICE = "+15555550101"
 PNG = b"\x89PNG\r\n\x1a\n" + bytes(range(64))
@@ -167,7 +168,7 @@ def test_url_download_and_send_path_mode(fake, http_server):
         PNG,
     )
 
-    result = asyncio.run(send_message_to_user("look", ALICE, [f"{base}/pic"]))
+    result = run_tool(send_message_to_user("look", ALICE, [f"{base}/pic"]))
     assert result == {"message": "Message sent successfully"}
 
     # The daemon received a local temp path whose bytes are the downloaded file.
@@ -186,7 +187,7 @@ def test_url_download_data_uri_mode(fake, monkeypatch, http_server):
     server, base = http_server
     server.routes["/pic"] = (200, {"Content-Type": "image/png"}, PNG)
 
-    asyncio.run(send_message_to_user("look", ALICE, [f"{base}/pic"]))
+    run_tool(send_message_to_user("look", ALICE, [f"{base}/pic"]))
 
     (uri,) = _send_attachments(fake)
     header, b64 = uri.split(",", 1)
@@ -200,7 +201,7 @@ def test_url_basename_used_when_no_content_disposition(fake, http_server):
     server, base = http_server
     server.routes["/files/photo.png"] = (200, {"Content-Type": "image/png"}, PNG)
 
-    asyncio.run(send_message_to_user("", ALICE, [f"{base}/files/photo.png"]))
+    run_tool(send_message_to_user("", ALICE, [f"{base}/files/photo.png"]))
 
     (path,) = _send_attachments(fake)
     assert os.path.basename(path) == "photo.png"
@@ -221,7 +222,7 @@ def test_url_size_cap_aborts_before_rpc(fake, monkeypatch, http_server):
     )
 
     with pytest.raises(SignalError, match="exceeds"):
-        asyncio.run(send_message_to_user("hi", ALICE, [f"{base}/big"]))
+        run_tool(send_message_to_user("hi", ALICE, [f"{base}/big"]))
 
     assert fake.calls == []  # no RPC issued
     assert _leftover_temp_dirs() == []  # temp dir cleaned up despite the abort
@@ -229,14 +230,14 @@ def test_url_size_cap_aborts_before_rpc(fake, monkeypatch, http_server):
 
 def test_bad_url_scheme_rejected_before_rpc(fake):
     with pytest.raises(SignalError, match="only http and https"):
-        asyncio.run(send_message_to_user("hi", ALICE, ["ftp://host/file.bin"]))
+        run_tool(send_message_to_user("hi", ALICE, ["ftp://host/file.bin"]))
     assert fake.calls == []
 
 
 def test_url_download_404_errors_before_rpc(fake, http_server):
     server, base = http_server
     with pytest.raises(SignalError, match="Failed to download"):
-        asyncio.run(send_message_to_user("hi", ALICE, [f"{base}/missing"]))
+        run_tool(send_message_to_user("hi", ALICE, [f"{base}/missing"]))
     assert fake.calls == []
     assert _leftover_temp_dirs() == []
 
@@ -244,7 +245,7 @@ def test_url_download_404_errors_before_rpc(fake, http_server):
 def test_url_connection_refused_errors_before_rpc(fake):
     # Nothing listening on this port -> connection refused -> SignalError.
     with pytest.raises(SignalError, match="Failed to download"):
-        asyncio.run(send_message_to_user("hi", ALICE, ["http://127.0.0.1:9/none"]))
+        run_tool(send_message_to_user("hi", ALICE, ["http://127.0.0.1:9/none"]))
     assert fake.calls == []
     assert _leftover_temp_dirs() == []
 
@@ -259,7 +260,7 @@ def test_url_redirect_to_http_is_followed(fake, http_server):
     server.routes["/pic"] = (200, {"Content-Type": "image/png"}, PNG)
     server.routes["/redir"] = (302, {"Location": f"{base}/pic"}, b"")
 
-    asyncio.run(send_message_to_user("look", ALICE, [f"{base}/redir"]))
+    run_tool(send_message_to_user("look", ALICE, [f"{base}/redir"]))
 
     assert fake.attachment_bytes == [PNG]
     assert _leftover_temp_dirs() == []
@@ -271,7 +272,7 @@ def test_url_redirect_to_non_http_scheme_rejected(fake, http_server):
     server.routes["/evil"] = (302, {"Location": "ftp://example.com/secret"}, b"")
 
     with pytest.raises(SignalError, match="redirect"):
-        asyncio.run(send_message_to_user("hi", ALICE, [f"{base}/evil"]))
+        run_tool(send_message_to_user("hi", ALICE, [f"{base}/evil"]))
 
     assert fake.calls == []
     assert _leftover_temp_dirs() == []
@@ -317,9 +318,7 @@ def test_mixed_url_file_and_data_uri(fake, tmp_path, http_server):
     local.write_text("hello")
     data_uri = "data:text/plain;filename=x.txt;base64,aGk="
 
-    asyncio.run(
-        send_message_to_user("all", ALICE, [f"{base}/pic", str(local), data_uri])
-    )
+    run_tool(send_message_to_user("all", ALICE, [f"{base}/pic", str(local), data_uri]))
 
     url_att, file_att, data_att = _send_attachments(fake)
     assert os.path.basename(url_att) == "pic.png"  # ext derived from Content-Type

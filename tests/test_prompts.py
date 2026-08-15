@@ -15,7 +15,7 @@ from signal_mcp.tools import mcp
 
 def _get_prompt_text(name: str, arguments: dict[str, str] | None = None) -> str:
     """Render a prompt and return the text of its single user message."""
-    result = asyncio.run(mcp.get_prompt(name, arguments))
+    result = asyncio.run(mcp.render_prompt(name, arguments))
     assert len(result.messages) == 1
     message = result.messages[0]
     assert message.role == "user"
