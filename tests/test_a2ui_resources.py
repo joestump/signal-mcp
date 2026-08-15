@@ -127,6 +127,41 @@ def test_percent_encoded_group_id_round_trips_through_the_uri():
     assert "group hi" in content.content
 
 
+def test_encoded_slash_in_group_id_round_trips():
+    """An encoded slash in a group id stays inside the matched segment.
+
+    ``{id}`` is a simple RFC 6570 placeholder matching one segment, and
+    fastmcp matches the still-encoded path before unquoting the captured
+    value — so ``%2F`` does not split the segment and decodes to a literal
+    ``/``. Real base64 group ids contain ``/``, so this is the common case,
+    and a matcher that decoded before matching would break every group
+    thread read.
+    """
+    group_id = "aGVs/bG8="  # base64 with / and =
+    buf = ConversationBuffer()
+    from signal_mcp.history import BufferedMessage
+
+    buf.record(
+        BufferedMessage(
+            conversation_key=group_id,
+            direction="inbound",
+            sender_id="+123",
+            sender_name="Alice",
+            text="group with slash",
+            timestamp=1000,
+        )
+    )
+    with (
+        patch("signal_mcp.tools.history_buffer", buf),
+        patch.object(config, "account", "+456"),
+    ):
+        content = asyncio.run(
+            mcp.read_resource("signal://conversation/aGVs%2FbG8%3D/a2ui")
+        ).contents[0]
+
+    assert "group with slash" in content.content
+
+
 def test_handler_does_not_decode_its_argument_again():
     """The handler treats its id as already-decoded.
 
