@@ -8,6 +8,10 @@ license = "MIT"
 license-files = ["LICENSE"]
 dependencies = [
     "anyio>=4.0.0",
+    # Held below 4.0 deliberately: that release moves the task subsystem out to
+    # a separate fastmcp-tasks package and changes internals this depends on
+    # (ResourceTemplate._read loses task_meta). Worth its own upgrade PR, not a
+    # version bump — see the 4.0 note on tools._a2ui_result.
     "fastmcp>=3.4.7,<4",
     # fastmcp vendors nothing — it builds on the official SDK, which
     # signal_mcp.channel imports directly (mcp.server.stdio, mcp.types).

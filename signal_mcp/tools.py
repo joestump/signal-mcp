@@ -78,15 +78,20 @@ def _a2ui_result(env: dict[str, Any]) -> ResourceResult:
     """Serialize *env* as an A2UI resource result with an explicit MIME type.
 
     The MIME type is stated on the content rather than left to the ``mime_type``
-    declared on the registration: fastmcp 3.4.7's
+    declared on the registration: through fastmcp 3.4.7,
     ``ResourceTemplate.convert_result`` builds the result without forwarding the
     template's declared type, so a handler returning a bare ``str`` reaches the
     host as ``text/plain``. (The concrete-``Resource`` path does forward it — the
     template override is what drops it.) A2UI hosts key off the MIME type to
     decide whether to render a surface, so falling back would silently turn every
-    surface back into plain text. Returning a ``ResourceResult`` passes through
-    ``convert_result`` untouched, which is correct either way and stays correct
-    once the upstream gap closes.
+    surface back into plain text.
+
+    Fixed upstream for 4.0 — present since v4.0.0b1, which forwards
+    ``self.mime_type`` so reads match what resourceTemplates/list advertises —
+    but unreleased on the 3.x line this pins. Returning a ``ResourceResult``
+    rather than a ``str`` is the durable form either way: ``convert_result``
+    passes one through untouched on both code paths, so this stays correct
+    across the 4.0 upgrade instead of becoming redundant-but-wrong.
     """
     return ResourceResult(
         [ResourceContent(content=json.dumps(env), mime_type=A2UI_MIME)]
