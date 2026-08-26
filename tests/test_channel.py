@@ -668,12 +668,14 @@ def test_sync_sent_group_message_keeps_group_routing():
     assert "author" not in meta
 
 
-def test_sync_sent_reaction_routes_to_destination():
-    """The reported bug: reacting from the phone to someone else's message.
+def test_sync_sent_reaction_in_a_dm_routes_to_the_counterparty():
+    """The reported bug, on the path that still forwards.
 
-    Routing this on the envelope author put the reaction in Note to Self with
-    a target_author who had never posted there, which Signal renders as a
-    dangling "Reacted with X to <name>'s message" bubble.
+    The agent (which sends as the account) messages Chelsea; the operator
+    hearts that message from their phone. Routing this on the envelope author
+    put the reaction in Note to Self carrying a target_author who had never
+    posted there, which Signal renders as a dangling "Reacted with X to
+    <name>'s message" bubble instead of attaching the emoji.
     """
     msg = MessageResponse(
         sender_id=ACCOUNT,
@@ -682,7 +684,7 @@ def test_sync_sent_reaction_routes_to_destination():
         destination=OTHER,
         reaction=Reaction(
             emoji="\U0001f44d",
-            target_author=OTHER,
+            target_author=ACCOUNT,
             target_timestamp=1744185565466,
         ),
     )
@@ -691,7 +693,7 @@ def test_sync_sent_reaction_routes_to_destination():
     meta = sent[0].message.root.params["meta"]
     assert meta["sender"] == OTHER
     assert meta["author"] == ACCOUNT
-    assert meta["reaction_target_author"] == OTHER
+    assert meta["reaction_target_author"] == ACCOUNT
 
 
 def test_inbound_dm_meta_is_unchanged_by_sync_handling():
@@ -716,3 +718,56 @@ def test_read_receipt_still_sent_for_inbound_messages():
     receipts = [c for c in fake.calls if c[0] == "sendReceipt"]
     assert len(receipts) == 1
     assert receipts[0][1]["recipient"] == [OTHER]
+
+
+def test_sync_sent_reaction_to_third_party_is_dropped():
+    """The operator hearting a friend's message is not an instruction.
+
+    These sync in as a side effect of tapping an emoji in a normal chat, and
+    the prefix filter cannot gate them (a reaction has no text), so the
+    forwarder drops them outright rather than echoing one back per tap.
+    """
+    msg = MessageResponse(
+        sender_id=ACCOUNT,
+        timestamp=1782555800000,
+        is_sync_sent=True,
+        destination=OTHER,
+        reaction=Reaction(
+            emoji="❤️",
+            target_author=OTHER,
+            target_timestamp=1744185565466,
+        ),
+    )
+    sent, _ = _run_forwarder([msg], account=ACCOUNT, prefix="cc")
+    assert sent == []
+
+
+def test_sync_sent_reaction_to_own_message_still_forwards():
+    """Reacting to something the agent said is real feedback — keep it."""
+    msg = MessageResponse(
+        sender_id=ACCOUNT,
+        timestamp=1782555227946,
+        is_sync_sent=True,
+        destination=ACCOUNT,
+        reaction=Reaction(
+            emoji="\U0001f44d",
+            target_author=ACCOUNT,
+            target_timestamp=1782554453770,
+        ),
+    )
+    sent, _ = _run_forwarder([msg], account=ACCOUNT, prefix="cc")
+    assert len(sent) == 1
+    meta = sent[0].message.root.params["meta"]
+    assert meta["sender"] == ACCOUNT
+    assert meta["reaction_target_author"] == ACCOUNT
+
+
+def test_inbound_reaction_still_forwards_under_a_prefix():
+    """Someone else reacting to the agent's message bypasses the prefix gate."""
+    sent, _ = _run_forwarder(
+        [_reaction_msg(sender=OTHER, target_author=ACCOUNT)],
+        account=ACCOUNT,
+        prefix="cc",
+    )
+    assert len(sent) == 1
+    assert sent[0].message.root.params["meta"]["sender"] == OTHER

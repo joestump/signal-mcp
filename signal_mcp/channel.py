@@ -330,6 +330,27 @@ async def _forward_channel_messages(write_stream: Any) -> None:
             # for prefix users). No read receipt is sent for a reaction —
             # Signal clients do not expect reads for reactions.
             if msg.reaction is not None:
+                # A reaction the account made itself, on someone ELSE's
+                # message, is not addressed to the agent — it is the operator
+                # tapping an emoji in their own chat, which syncs here as a
+                # side effect. Forwarding it made the agent echo a reaction
+                # back for every heart the operator left on a friend's
+                # message. The prefix filter cannot catch these (a reaction
+                # has no text to prefix), so gate them here. A sync-sent
+                # reaction targeting the account's OWN message still forwards:
+                # that is the operator reacting to something the agent said,
+                # which is exactly the lightweight-feedback path reactions
+                # exist for.
+                if (
+                    msg.is_sync_sent
+                    and config.account
+                    and msg.reaction.target_author != config.account
+                ):
+                    logger.info(
+                        "Channel forwarder: dropped sync-sent reaction to a "
+                        "third party's message"
+                    )
+                    continue
                 notification = _reaction_notification(msg)
                 if notification is None:
                     logger.info(
