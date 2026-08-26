@@ -18,6 +18,7 @@ from mcp.types import JSONRPCMessage, JSONRPCNotification
 
 from signal_mcp import s3
 from signal_mcp.config import config, is_trusted_sender
+from signal_mcp.history import conversation_key
 from signal_mcp.parse import Attachment, MessageResponse
 from signal_mcp.prompts import SIGNAL_FORMATTING_RULES
 from signal_mcp.rpc import SignalCLIError, get_client
@@ -32,10 +33,18 @@ via Signal, and you can message them back.
 
 Inbound messages from Signal arrive as <channel source="signal" sender="..." \
 sender_name="..." group="...">. The body text is the content.
-The notification's ``meta`` object carries the sender's Signal identifier as
-``sender`` (use it as ``user_id`` for ``send_message_to_user``), ``sender_name``
-when known, ``group`` when set, and ``timestamp`` — the inbound message's
-Signal timestamp.
+The notification's ``meta`` object carries the conversation counterparty's
+Signal identifier as ``sender`` (use it as ``user_id`` for
+``send_message_to_user``), ``sender_name`` when known, ``group`` when set, and
+``timestamp`` — the inbound message's Signal timestamp.
+``sender`` is always the identifier to reply to, never merely the envelope
+author. When the operator sends something from their phone or another linked
+device, that syncs to this server with the account's own number as the
+envelope author; ``meta`` then carries ``sync_sent: "true"`` and an ``author``
+field with that account number, while ``sender`` holds the person the operator
+was actually talking to. Reply and react to ``sender`` — using ``author`` would
+send the answer to the operator's own Note-to-Self thread instead of to the
+conversation it belongs in.
 To react to a message instead of replying in words, call
 send_reaction_to_user with user_id=sender, target_author=sender and
 target_timestamp=timestamp — or, when group is set,
@@ -43,6 +52,11 @@ send_reaction_to_group with group_id=group and the same target_author and
 target_timestamp. Both reaction tools require target_author and
 target_timestamp to identify the message being reacted to; omitting or
 guessing them attaches the reaction to nothing and the user sees no change.
+When ``author`` is present (a sync-sent event), pass ``author`` as
+target_author rather than ``sender`` — the operator wrote that message, so it
+is their number that identifies it — while user_id/group_id still take
+``sender``/``group``. A reaction whose target_author does not match the real
+author of target_timestamp's message attaches to nothing.
 Messages may carry file attachments, delivered as annotation lines in the
 body like [attachment: /path/to/file (image/jpeg, 245 KB)]. The path is a
 local file — open it with your Read tool (images render natively). When S3
@@ -141,14 +155,45 @@ def _attachment_line(attachment: Attachment) -> str:
 def _base_meta(msg: MessageResponse) -> dict[str, str]:
     """Build the ``meta`` fields common to every channel event.
 
-    ``sender`` is always present (empty string when unknown); ``sender_name``
-    and ``group`` are added only when set. ``timestamp`` carries the inbound
-    message's Signal timestamp as a string — it is the value to pass back as
-    ``target_timestamp`` to ``send_reaction_to_user`` / ``send_reaction_to_group``
-    to react to this specific message. Callers may extend the returned dict
-    with event-specific fields (e.g. reaction details).
+    ``sender`` is the **conversation counterparty** — the identifier to reply
+    or react to, which is what every consumer of this meta does with it (the
+    channel instructions say to pass it as ``user_id``, and Crush's
+    ``channel_reply`` router reads this exact key as its reply target). For
+    ordinary inbound traffic that is the message's author. For a *sync-sent*
+    envelope — anything the account sent from the phone or another linked
+    device, which a linked device receives with ``envelope.source`` set to the
+    account's OWN number — the author is useless as a reply target, so
+    ``sender`` carries ``destination`` (the person the account was talking to)
+    instead. Without this, every synced message and reaction routes back to
+    the account's own Note-to-Self thread. :func:`conversation_key` owns that
+    resolution so the channel and the history buffer thread traffic
+    identically.
+
+    ``author`` is added only when it differs from ``sender`` (i.e. on
+    sync-sent traffic) and carries the true envelope source, so a consumer
+    that needs to know who actually wrote the message still can.
+    ``sync_sent`` is ``"true"`` on those same events.
+
+    ``sender_name`` and ``group`` are added only when set. ``timestamp``
+    carries the inbound message's Signal timestamp as a string — it is the
+    value to pass back as ``target_timestamp`` to ``send_reaction_to_user`` /
+    ``send_reaction_to_group`` to react to this specific message. Callers may
+    extend the returned dict with event-specific fields (e.g. reaction
+    details).
     """
-    meta: dict[str, str] = {"sender": msg.sender_id or ""}
+    # Groups are routed via meta["group"], so resolve the DM counterparty
+    # here with group_id=None and let the group key be set separately below.
+    counterparty = conversation_key(
+        group_id=None,
+        sender_id=msg.sender_id,
+        destination=msg.destination,
+        account=config.account,
+    )
+    meta: dict[str, str] = {"sender": counterparty or msg.sender_id or ""}
+    if msg.sender_id and msg.sender_id != meta["sender"]:
+        meta["author"] = msg.sender_id
+    if msg.is_sync_sent:
+        meta["sync_sent"] = "true"
     if msg.sender_name:
         meta["sender_name"] = msg.sender_name
     if msg.group_id:
@@ -335,7 +380,10 @@ async def _forward_channel_messages(write_stream: Any) -> None:
             logger.info(f"Channel forwarder: forwarded message from {msg.sender_id}")
 
             # Auto-mark as read so Signal shows the message as delivered/read.
-            if msg.sender_id and msg.timestamp:
+            # Never for sync-sent traffic: the account itself authored those,
+            # so a receipt would be the account telling itself it had read its
+            # own message.
+            if msg.sender_id and msg.timestamp and not msg.is_sync_sent:
                 try:
                     await _send_receipt(msg.sender_id, msg.timestamp)
                 except Exception:  # noqa: BLE001

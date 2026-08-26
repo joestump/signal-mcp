@@ -92,13 +92,19 @@ def _attachment_msg(
     )
 
 
-def _run_forwarder(messages, prefix=""):
+def _run_forwarder(messages, prefix="", account=""):
     """Run the forwarder just long enough to drain queued messages, then cancel.
     Returns (sent_notifications, fake_client).
+
+    ``config`` is a process-global, so the values this helper overrides are
+    restored afterwards — otherwise a test that needs an ``account`` set would
+    leak it into every module that runs after it.
     """
-    config.prefix = prefix
     fake_client = FakeClient(messages)
     stream = FakeWriteStream()
+    saved_prefix, saved_account = config.prefix, config.account
+    config.prefix = prefix
+    config.account = account
 
     async def _runner():
         with patch.object(rpc, "client", fake_client):
@@ -111,7 +117,10 @@ def _run_forwarder(messages, prefix=""):
                 pass
             return stream.sent, fake_client
 
-    return asyncio.run(_runner())
+    try:
+        return asyncio.run(_runner())
+    finally:
+        config.prefix, config.account = saved_prefix, saved_account
 
 
 def test_forwards_text_message():
@@ -590,3 +599,120 @@ def test_channel_instructions_mention_a2ui_resources():
 
     assert "signal://conversations/a2ui" in CHANNEL_INSTRUCTIONS
     assert "signal://conversation/{id}/a2ui" in CHANNEL_INSTRUCTIONS
+
+
+# Sync-Sent Routing
+#
+# Anything the account sends from the phone or another linked device reaches
+# this server as a syncMessage.sentMessage envelope whose ``source`` is the
+# account's OWN number. Routing on that author sends every reply and reaction
+# to the account's Note-to-Self thread instead of to the conversation it
+# belongs in, so ``meta["sender"]`` must carry the counterparty
+# (``destination``) and expose the true author separately as ``author``.
+#
+# @joestump-agent 08/26/2026 - Added alongside the _base_meta fix; the channel
+# layer had no sync-sent coverage at all, which is how the bug shipped.
+
+ACCOUNT = "+12060000000"
+OTHER = "+15551234567"
+
+
+def _sync_sent_dm(
+    text="sent from my phone", destination=OTHER, timestamp=1782555600000
+):
+    """A DM the account sent from another device: source is the account."""
+    return MessageResponse(
+        message=text,
+        sender_id=ACCOUNT,
+        timestamp=timestamp,
+        is_sync_sent=True,
+        destination=destination,
+    )
+
+
+def test_sync_sent_dm_routes_to_destination_not_the_account():
+    """meta['sender'] is the counterparty, so the reply lands in their thread."""
+    sent, _ = _run_forwarder([_sync_sent_dm()], account=ACCOUNT)
+    assert len(sent) == 1
+    meta = sent[0].message.root.params["meta"]
+    assert meta["sender"] == OTHER
+    # The real envelope author stays available, just not as the reply target.
+    assert meta["author"] == ACCOUNT
+    assert meta["sync_sent"] == "true"
+
+
+def test_sync_sent_note_to_self_routes_to_the_account():
+    """A genuine Note-to-Self message still routes to the account itself."""
+    sent, _ = _run_forwarder([_sync_sent_dm(destination=ACCOUNT)], account=ACCOUNT)
+    meta = sent[0].message.root.params["meta"]
+    assert meta["sender"] == ACCOUNT
+    # sender == author here, so no redundant author key.
+    assert "author" not in meta
+    assert meta["sync_sent"] == "true"
+
+
+def test_sync_sent_group_message_keeps_group_routing():
+    """Group traffic routes on the group id; sender falls back to the account."""
+    msg = MessageResponse(
+        message="hi team from phone",
+        sender_id=ACCOUNT,
+        group_id="GID==",
+        timestamp=1782555700000,
+        is_sync_sent=True,
+        destination=None,
+    )
+    sent, _ = _run_forwarder([msg], account=ACCOUNT)
+    meta = sent[0].message.root.params["meta"]
+    assert meta["group"] == "GID=="
+    assert meta["sender"] == ACCOUNT
+    assert "author" not in meta
+
+
+def test_sync_sent_reaction_routes_to_destination():
+    """The reported bug: reacting from the phone to someone else's message.
+
+    Routing this on the envelope author put the reaction in Note to Self with
+    a target_author who had never posted there, which Signal renders as a
+    dangling "Reacted with X to <name>'s message" bubble.
+    """
+    msg = MessageResponse(
+        sender_id=ACCOUNT,
+        timestamp=1782555800000,
+        is_sync_sent=True,
+        destination=OTHER,
+        reaction=Reaction(
+            emoji="\U0001f44d",
+            target_author=OTHER,
+            target_timestamp=1744185565466,
+        ),
+    )
+    sent, _ = _run_forwarder([msg], account=ACCOUNT)
+    assert len(sent) == 1
+    meta = sent[0].message.root.params["meta"]
+    assert meta["sender"] == OTHER
+    assert meta["author"] == ACCOUNT
+    assert meta["reaction_target_author"] == OTHER
+
+
+def test_inbound_dm_meta_is_unchanged_by_sync_handling():
+    """An ordinary inbound message gains no sync keys and still routes to its
+    author — the fix must not perturb the common path."""
+    sent, _ = _run_forwarder([_text_msg("hello", sender=OTHER)], account=ACCOUNT)
+    meta = sent[0].message.root.params["meta"]
+    assert meta["sender"] == OTHER
+    assert "author" not in meta
+    assert "sync_sent" not in meta
+
+
+def test_no_read_receipt_for_sync_sent_messages():
+    """The account never sends itself a read receipt for its own message."""
+    _, fake = _run_forwarder([_sync_sent_dm()], account=ACCOUNT)
+    assert [c for c in fake.calls if c[0] == "sendReceipt"] == []
+
+
+def test_read_receipt_still_sent_for_inbound_messages():
+    """Guard the negative above: inbound traffic keeps its receipt."""
+    _, fake = _run_forwarder([_text_msg("hello", sender=OTHER)], account=ACCOUNT)
+    receipts = [c for c in fake.calls if c[0] == "sendReceipt"]
+    assert len(receipts) == 1
+    assert receipts[0][1]["recipient"] == [OTHER]
