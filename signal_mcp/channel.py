@@ -83,7 +83,14 @@ direct message. When the group attribute is set the message came from a group:
 reply with send_message_to_group passing group as group_id, so the answer lands
 in the group rather than as a direct message to its author.
 Use send to proactively message the operator's phone (no phone number needed).
-Always reply to acknowledge inbound messages, even if briefly.
+Every inbound message MUST be acknowledged immediately, before any work
+begins — silence until the finished answer arrives is never acceptable. The
+lightweight default is an emoji reaction to the sender's message (the
+reaction tools above; the notification's meta carries the target_author and
+timestamp they need). For a message that carries real work — a task, a
+question, a request — pair the reaction with a brief text acknowledgement
+naming what is being started, then send the real reply when the work lands.
+An acknowledgement is never a substitute for the eventual answer.
 When the user asks to see messages or conversation threads, read the A2UI
 chat-surface resources: signal://conversations/a2ui lists buffered
 conversations, and signal://conversation/{id}/a2ui renders one thread as
