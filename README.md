@@ -388,8 +388,10 @@ moment it arrives.
 
 ### How channel mode works
 
-- Transport is forced to **stdio** (Claude launches the server as a
-  subprocess, same as normal stdio mode).
+- Transport is **stdio** by default (Claude launches the server as a
+  subprocess, same as normal stdio mode). `--transport http` runs the
+  server as a central HTTP channel service with reply routing — see
+  [Central HTTP channel mode](#central-http-channel-mode-and-reply-routing).
 - The server declares the `claude/channel` experimental capability so Claude
   knows to expect push notifications.
 - A background task listens on the signal-cli daemon and forwards each text
@@ -474,6 +476,71 @@ The `--prefix` flag is optional — add it if you want selective forwarding:
 claude mcp add signal \
   -- signal-mcp --operator +15551234567 --channel --prefix "claude"
 ```
+
+
+### Central HTTP channel mode and reply routing
+
+When several agents send you Signal messages through one daemon — scheduled
+tasks, harness units, one-shot sessions — a reply you type on the phone
+should reach the agent that sent the message being replied to, and no other
+agent. For that, signal-mcp can run **once, centrally**, in channel mode over
+streamable HTTP (SPEC-0002 / ADR-0002):
+
+- Each connected agent identifies itself per session with an
+  `X-Signal-Agent-Id` request header.
+- Every successful send records its Signal timestamp in a bounded, in-memory
+  route table (default: 7-day TTL, 10 000 entries; never persisted, never
+  derived from the conversation buffer).
+- An inbound reply carries a `quote` whose `id` is the original timestamp; the
+  forwarder resolves it against the table and delivers the
+  `notifications/claude/channel` event to that agent's live sessions only.
+  Reactions route identically.
+- Traffic that cannot be routed — non-replies, replies to unknown or
+  pre-restart timestamps, replies to an offline agent — goes to the
+  **default agent** (`--default-agent`), or fans out to every live session
+  when no default is configured. Fallback deliveries carry `route_status`
+  (`unrouted` / `unknown` / `agent_offline`) and `routed_agent` in `meta`
+  plus the quoted text, so the receiving agent knows it is acting on another
+  agent's behalf.
+- Exactly one read receipt is sent per delivered message, no matter how many
+  sessions received it.
+
+Every channel notification (stdio and HTTP) now also carries
+`in_reply_to_timestamp`, `in_reply_to_author`, and `in_reply_to_text` in
+`meta` when the message quotes another message.
+
+Run the central server:
+
+```bash
+SIGNAL_MCP_AUTH_TOKEN=<secret-from-your-secrets-store> signal-mcp --operator +15551234567 --channel --transport http   --default-agent crush-signal   --host 127.0.0.1 --port 8765
+```
+
+The HTTP transport requires a bearer token (`--auth-token` /
+`SIGNAL_MCP_AUTH_TOKEN`); it refuses to start unauthenticated unless
+`--allow-unauthenticated` is passed with a loopback bind. TLS is the reverse
+proxy's job when exposing the endpoint across hosts.
+
+Point each agent's MCP client at the endpoint with its identifying header:
+
+```bash
+claude mcp add signal --transport http   --header "X-Signal-Agent-Id: deploy-bot"   --header "Authorization: Bearer <token>"   --url http://signal-mcp.internal:8765/mcp
+```
+
+stdio channel mode is unchanged and remains the right choice for a single
+agent on a single machine.
+
+#### HTTP channel configuration
+
+| Flag | Env var | Default | Description |
+| --- | --- | --- | --- |
+| `--transport http` | `SIGNAL_MCP_TRANSPORT` | `sse` | Streamable-HTTP transport (requires `--channel`). |
+| `--host` | `SIGNAL_MCP_HOST` | `127.0.0.1` | Bind address. |
+| `--port` | `SIGNAL_MCP_PORT` | `8765` | Bind port. |
+| `--auth-token` | `SIGNAL_MCP_AUTH_TOKEN` | *(none)* | Required bearer token. Never logged. |
+| `--allow-unauthenticated` | `SIGNAL_MCP_ALLOW_UNAUTHENTICATED` | `false` | Run without auth — loopback binds only. |
+| `--default-agent` | `SIGNAL_MCP_DEFAULT_AGENT` | *(none)* | Agent id that receives unrouted traffic. |
+| `--route-ttl` | `SIGNAL_MCP_ROUTE_TTL` | `604800` | Seconds a route stays resolvable. |
+| `--route-max-entries` | `SIGNAL_MCP_ROUTE_MAX_ENTRIES` | `10000` | Route table cap (FIFO eviction). |
 
 ## Tools
 
