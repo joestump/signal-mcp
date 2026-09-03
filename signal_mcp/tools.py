@@ -22,6 +22,7 @@ from urllib.parse import quote, unquote, urlsplit
 
 from fastmcp import FastMCP
 from fastmcp.resources import ResourceContent, ResourceResult
+from fastmcp.server.dependencies import get_http_headers
 from mcp.types import Annotations
 
 from signal_mcp import a2ui, s3
@@ -34,6 +35,7 @@ from signal_mcp.history import (
 )
 from signal_mcp.parse import MessageResponse
 from signal_mcp.prompts import register_prompts
+from signal_mcp.routing import get_route_table, normalize_agent_id
 from signal_mcp.rpc import (
     SignalCLIError,
     SignalDisconnectedError,
@@ -46,7 +48,14 @@ logger = logging.getLogger(__name__)
 
 
 # The MCP server instance all tools register against.
-mcp = FastMCP(name="signal-cli")
+mcp = FastMCP(
+    name="signal-cli",
+    # The experimental claude/channel capability is declared in every
+    # transport: the stdio channel path re-declares it via its own init
+    # options, and the HTTP channel path (SPEC-0002) needs it advertised on
+    # the streamable-HTTP session, which fastmcp builds from these.
+    experimental_capabilities={"claude/channel": {}},
+)
 register_prompts(mcp)
 
 # ---------------------------------------------------------------------------
@@ -666,6 +675,50 @@ async def _send_message(
         is_group=is_group,
         attachments=_buffered_attachments(attachments),
     )
+
+    # Record the reply route (SPEC-0002 REQ "Route Registry"): in HTTP
+    # channel mode, an inbound reply quoting this timestamp must come back
+    # to the session that sent it. Never raises — routing must not fail a
+    # send that already succeeded.
+    if config.routing_enabled and ts is not None:
+        agent_id = _current_agent_id()
+        if agent_id:
+            get_route_table().record(
+                timestamp=int(ts),
+                agent_id=agent_id,
+                conversation_key=conversation_key(
+                    group_id=target if is_group else None,
+                    sender_id=config.account,
+                    destination=target if not is_group else None,
+                    account=config.account,
+                )
+                or target,
+                preview=message,
+            )
+
+
+def _current_agent_id() -> str | None:
+    """The calling session's agent id, or ``None`` when it cannot be known.
+
+    Prefers the ``X-Signal-Agent-Id`` request header (HTTP channel mode);
+    falls back to the MCP session id when there is no HTTP request context.
+    Both lookups are request-scoped fastmcp dependencies, so a call outside
+    a request (or a fastmcp that moved them) yields ``None`` and the send
+    simply records no route.
+    """
+    try:
+        headers = get_http_headers() or {}
+        agent = normalize_agent_id(headers.get("x-signal-agent-id"))
+        if agent:
+            return agent
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        from fastmcp.server.dependencies import get_context
+
+        return normalize_agent_id(get_context().session_id)
+    except Exception:  # noqa: BLE001
+        return None
 
 
 async def _send_reaction(
