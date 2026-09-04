@@ -166,8 +166,13 @@ def _parse_quote(raw: Any) -> Quote | None:
     if not isinstance(raw, dict):
         return None
     timestamp = raw.get("id")
+    try:
+        parsed_timestamp = int(timestamp) if timestamp is not None else None
+    except (TypeError, ValueError):
+        # A non-numeric quote id must not make the envelope unparseable.
+        parsed_timestamp = None
     return Quote(
-        timestamp=int(timestamp) if timestamp is not None else None,
+        timestamp=parsed_timestamp,
         author=raw.get("author") or raw.get("authorNumber"),
         text=truncate_utf8(raw.get("text") or "") or None,
     )

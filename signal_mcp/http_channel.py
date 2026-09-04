@@ -81,8 +81,16 @@ class AgentIdentityMiddleware(Middleware):
         result = await call_next(context)
 
         headers = {}
-        with contextlib.suppress(Exception):
+        try:
             headers = get_http_headers() or {}
+        except Exception:  # noqa: BLE001
+            # No HTTP request context (or fastmcp moved the dependency):
+            # treated exactly like a missing header, but logged so it is
+            # not silently swallowed.
+            logger.warning(
+                "Could not read HTTP headers during initialize",
+                exc_info=True,
+            )
         raw_agent = headers.get(AGENT_ID_HEADER)
         fastmcp_context = context.fastmcp_context
         session = fastmcp_context.session if fastmcp_context else None
@@ -92,7 +100,11 @@ class AgentIdentityMiddleware(Middleware):
             # one in practice). Leave the result untouched.
             return result
 
-        agent_id = normalize_agent_id(raw_agent) or session_id
+        agent_id = (
+            normalize_agent_id(raw_agent)
+            or normalize_agent_id(session_id)
+            or session_id
+        )
         get_session_registry().register(agent_id, session_id, session)
 
         if isinstance(result, InitializeResult):
@@ -123,21 +135,31 @@ class _SecurityASGIMiddleware:
             k.decode("latin-1").lower(): v.decode("latin-1")
             for k, v in scope.get("headers", [])
         }
+
+        async def reject_too_large(send: Any) -> None:
+            await send(
+                {
+                    "type": "http.response.start",
+                    "status": 413,
+                    "headers": [
+                        (k.lower().encode(), v.encode())
+                        for k, v in SECURITY_HEADERS.items()
+                    ]
+                    + [(b"content-length", b"0")],
+                }
+            )
+            await send({"type": "http.response.body", "body": b""})
+
+        # Chunked bodies carry no content-length, so the cap could not see
+        # their size; they are rejected outright so every accepted body is
+        # bounded (SPEC-0002 Security Requirements).
+        if "chunked" in headers.get("transfer-encoding", "").lower():
+            await reject_too_large(send)
+            return
         content_length = headers.get("content-length")
         if content_length and content_length.isdigit():
             if int(content_length) > MAX_BODY_BYTES:
-                await send(
-                    {
-                        "type": "http.response.start",
-                        "status": 413,
-                        "headers": [
-                            (k.lower().encode(), v.encode())
-                            for k, v in SECURITY_HEADERS.items()
-                        ]
-                        + [(b"content-length", b"0")],
-                    }
-                )
-                await send({"type": "http.response.body", "body": b""})
+                await reject_too_large(send)
                 return
 
         async def send_with_security_headers(message: dict) -> None:

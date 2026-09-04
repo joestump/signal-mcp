@@ -128,6 +128,12 @@ class TestSessionRegistry:
         assert sessions.sessions_for("agent-a") == []
         assert not sessions.has_live("agent-a")
 
+    def test_agent_for_session(self):
+        sessions = SessionRegistry()
+        sessions.register("agent-a", "s1", object())
+        assert sessions.agent_for_session("s1") == "agent-a"
+        assert sessions.agent_for_session("missing") is None
+
     def test_unregister_unknown_is_noop(self):
         SessionRegistry().unregister("nope")
 

@@ -89,6 +89,24 @@ class TestQuoteParsing:
         assert len(text.encode()) <= 256
         text.encode("utf-8")  # no partial character
 
+    def test_malformed_quote_id_does_not_break_envelope(self):
+        response = _parse(
+            _envelope(
+                {
+                    "dataMessage": {
+                        "message": "still readable",
+                        "timestamp": 3,
+                        "quote": {"id": "not-a-number", "author": ACCOUNT, "text": "x"},
+                    }
+                }
+            )
+        )
+        assert response is not None
+        assert response.message == "still readable"
+        assert response.quote is not None
+        assert response.quote.timestamp is None
+        assert response.quote.author == ACCOUNT
+
     def test_non_actionable_envelope_still_dropped(self):
         assert (
             _envelope_to_response(

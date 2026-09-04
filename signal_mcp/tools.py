@@ -35,7 +35,11 @@ from signal_mcp.history import (
 )
 from signal_mcp.parse import MessageResponse
 from signal_mcp.prompts import register_prompts
-from signal_mcp.routing import get_route_table, normalize_agent_id
+from signal_mcp.routing import (
+    get_route_table,
+    get_session_registry,
+    normalize_agent_id,
+)
 from signal_mcp.rpc import (
     SignalCLIError,
     SignalDisconnectedError,
@@ -700,12 +704,23 @@ async def _send_message(
 def _current_agent_id() -> str | None:
     """The calling session's agent id, or ``None`` when it cannot be known.
 
-    Prefers the ``X-Signal-Agent-Id`` request header (HTTP channel mode);
-    falls back to the MCP session id when there is no HTTP request context.
-    Both lookups are request-scoped fastmcp dependencies, so a call outside
-    a request (or a fastmcp that moved them) yields ``None`` and the send
+    Identity is what the session registered at ``initialize``: the session
+    registry is asked first, so a session whose header goes missing on a
+    later request keeps its agent id. Falls back to the request header,
+    then to the MCP session id when there is no HTTP request context. All
+    lookups are request-scoped fastmcp dependencies, so a call outside a
+    request (or a fastmcp that moved them) yields ``None`` and the send
     simply records no route.
     """
+    try:
+        from fastmcp.server.dependencies import get_context
+
+        session_id = get_context().session_id
+        agent = get_session_registry().agent_for_session(session_id)
+        if agent:
+            return agent
+    except Exception:  # noqa: BLE001
+        session_id = None
     try:
         headers = get_http_headers() or {}
         agent = normalize_agent_id(headers.get("x-signal-agent-id"))
@@ -713,12 +728,7 @@ def _current_agent_id() -> str | None:
             return agent
     except Exception:  # noqa: BLE001
         pass
-    try:
-        from fastmcp.server.dependencies import get_context
-
-        return normalize_agent_id(get_context().session_id)
-    except Exception:  # noqa: BLE001
-        return None
+    return normalize_agent_id(session_id)
 
 
 async def _send_reaction(

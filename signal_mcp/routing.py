@@ -207,6 +207,10 @@ class SessionRegistry:
         """Live (session id, session) pairs for ``agent_id``; empty when offline."""
         return list((self._by_agent.get(agent_id) or {}).items())
 
+    def agent_for_session(self, session_id: str) -> str | None:
+        """The agent id a session registered under, or ``None``."""
+        return self._by_session.get(session_id)
+
     def all_sessions(self) -> list[tuple[str, str, object]]:
         """Every live (agent id, session id, session) triple across all agents."""
         return [

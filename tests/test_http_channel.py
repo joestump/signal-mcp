@@ -260,3 +260,44 @@ async def _scenario(port: int) -> None:
         server.should_exit = True
         with contextlib.suppress(asyncio.CancelledError):
             await server_task
+
+
+def test_chunked_body_rejected_with_413():
+    """A chunked request carries no content-length, so the cap rejects it
+    outright — every accepted body is bounded (SPEC-0002 Security)."""
+    from signal_mcp.http_channel import _SecurityASGIMiddleware
+
+    async def run() -> tuple[int, list[tuple[bytes, bytes]]]:
+        sent: list[dict] = []
+
+        async def app(scope, receive, send):  # pragma: no cover - must not run
+            raise AssertionError("chunked request reached the app")
+
+        async def receive():
+            return {"type": "http.request", "body": b"", "more_body": False}
+
+        async def send(message):
+            sent.append(message)
+
+        middleware = _SecurityASGIMiddleware(app)
+        await middleware(
+            {
+                "type": "http",
+                "method": "POST",
+                "path": "/mcp",
+                "headers": [
+                    (b"transfer-encoding", b"chunked"),
+                    (b"content-type", b"application/json"),
+                ],
+            },
+            receive,
+            send,
+        )
+        status = sent[0]["status"]
+        headers = [(k, v) for k, v in sent[0]["headers"]]
+        return status, headers
+
+    status, headers = asyncio.run(run())
+    assert status == 413
+    for name, value in SECURITY_HEADERS.items():
+        assert (name.lower().encode(), value.encode()) in headers

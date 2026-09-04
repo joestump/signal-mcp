@@ -477,9 +477,11 @@ def parse_args(argv: list[str] | None = None) -> SignalConfig:
         # The bare `--channel` invocation (no --transport) defaults to sse and
         # is coerced to stdio below, exactly as before this spec; only an
         # explicitly requested sse (flag or env) is refused.
-        explicit_sse = (
-            "--transport" in (argv or sys.argv[1:])
-            or os.environ.get("SIGNAL_MCP_TRANSPORT", "") == "sse"
+        argv = argv if argv is not None else sys.argv[1:]
+        explicit_sse = os.environ.get("SIGNAL_MCP_TRANSPORT", "") == "sse" or any(
+            (arg == "--transport" and i + 1 < len(argv) and argv[i + 1] == "sse")
+            or (arg.startswith("--transport=") and arg.split("=", 1)[1] == "sse")
+            for i, arg in enumerate(argv)
         )
         if explicit_sse:
             parser.error(
