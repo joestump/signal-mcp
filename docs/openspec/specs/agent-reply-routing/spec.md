@@ -241,7 +241,7 @@ All concurrent operations MUST follow safe concurrency patterns:
 
 ## Security Requirements
 
-<!-- Governing: ADR-0018 (Security-by-Default), SPEC-0016 REQ "Mandatory Security Section in Web Specs" -->
+<!-- Governing: ADR-0002 -->
 
 ### Authentication
 
