@@ -24,6 +24,7 @@ reactions — through a long-running `signal-cli daemon`.
   - [Channel mode configuration](#channel-mode-configuration)
   - [Prefix filtering](#prefix-filtering)
   - [Claude Code channel setup](#claude-code-channel-setup)
+  - [Central HTTP channel mode and reply routing](#central-http-channel-mode-and-reply-routing)
 - [Tools](#tools)
 - [A2UI chat surfaces](#a2ui-chat-surfaces)
 - [Prompts](#prompts)
@@ -526,8 +527,49 @@ Point each agent's MCP client at the endpoint with its identifying header:
 claude mcp add signal --transport http   --header "X-Signal-Agent-Id: deploy-bot"   --header "Authorization: Bearer <token>"   --url http://signal-mcp.internal:8765/mcp
 ```
 
+Crush takes the same headers in `crush.json`:
+
+```json
+{
+  "mcp": {
+    "signal": {
+      "type": "http",
+      "url": "http://signal-mcp.internal:8765/mcp",
+      "headers": {
+        "X-Signal-Agent-Id": "crush-signal",
+        "Authorization": "Bearer <token>"
+      }
+    }
+  }
+}
+```
+
 stdio channel mode is unchanged and remains the right choice for a single
 agent on a single machine.
+
+#### How routing decides
+
+| Situation | `route_status` | Delivered to |
+| --- | --- | --- |
+| Reply quotes a timestamp recorded by an agent with live sessions | `routed` | That agent's sessions only |
+| Reply quotes a timestamp recorded by an agent with no live session | `agent_offline` | Default agent (fallback) |
+| Reply quotes an unknown timestamp (never recorded, or pre-restart) | `unknown` | Default agent (fallback) |
+| Not a reply, or quotes someone else's message | `unrouted` | Default agent (fallback) |
+| Fallback but the default agent is offline | *(unchanged)* | Every live session |
+
+Fallback deliveries carry `routed_agent` (who the reply was meant for) and the
+quoted text, so the receiving agent can act with the sender's context.
+
+#### Limitations
+
+- **Routes are memory-only.** A restart forgets them; replies to pre-restart
+  messages arrive at the default agent as `unknown`, with the quoted text
+  attached.
+- **Offline agents are not woken** — their replies fall back to the default
+  agent rather than being queued.
+- The full guide (including the security model and the Crush/Claude Code
+  setup walkthrough) lives in the
+  [documentation](https://joestump.github.io/signal-mcp/docs/reply-routing).
 
 #### HTTP channel configuration
 
