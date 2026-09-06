@@ -133,6 +133,15 @@ def _log_startup(cfg: SignalConfig) -> None:
             f"prefix {cfg.s3_prefix!r}, presign TTL {cfg.s3_presign_ttl}s, "
             f"path-style {'on' if cfg.s3_force_path_style else 'off'}"
         )
+    if cfg.transport == "http":
+        # Never log the token value — only whether auth is on (SPEC-0002).
+        logger.info(
+            f"HTTP server binding {cfg.http_host}:{cfg.http_port} "
+            f"(auth={'enabled' if cfg.auth_token else 'DISABLED'}, "
+            f"default agent {cfg.default_agent or 'none'}, "
+            f"route TTL {cfg.route_ttl}s, "
+            f"route max entries {cfg.route_max_entries})"
+        )
 
 
 def _validate_s3(cfg: SignalConfig) -> None:
@@ -165,7 +174,12 @@ def main() -> None:
         if cfg.channel_mode:
             mcp._mcp_server.instructions = CHANNEL_INSTRUCTIONS
             logger.info("Claude Channel mode enabled")
-            anyio.run(run_channel_async)
+            if cfg.transport == "http":
+                from signal_mcp.http_channel import run_channel_http_async
+
+                anyio.run(run_channel_http_async)
+            else:
+                anyio.run(run_channel_async)
         else:
             mcp.run(cast(Literal["sse", "stdio"], cfg.transport))
     except Exception as e:

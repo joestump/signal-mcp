@@ -14,13 +14,25 @@ from typing import Any
 
 from mcp.server.stdio import stdio_server
 from mcp.shared.message import SessionMessage
-from mcp.types import JSONRPCMessage, JSONRPCNotification
+from mcp.types import (
+    JSONRPCMessage,
+    JSONRPCNotification,
+    Notification,
+    NotificationParams,
+)
+from pydantic import ConfigDict
 
 from signal_mcp import s3
 from signal_mcp.config import config, is_trusted_sender
 from signal_mcp.history import conversation_key
 from signal_mcp.parse import Attachment, MessageResponse
 from signal_mcp.prompts import SIGNAL_FORMATTING_RULES
+from signal_mcp.routing import (
+    Dispatch,
+    get_route_table,
+    get_session_registry,
+    resolve_recipients,
+)
 from signal_mcp.rpc import SignalCLIError, get_client
 from signal_mcp.tools import _send_receipt, mcp
 
@@ -91,6 +103,11 @@ timestamp they need). For a message that carries real work — a task, a
 question, a request — pair the reaction with a brief text acknowledgement
 naming what is being started, then send the real reply when the work lands.
 An acknowledgement is never a substitute for the eventual answer.
+Replies carry extra meta keys: ``in_reply_to_timestamp`` (the quoted
+message's Signal timestamp), ``in_reply_to_author``, and
+``in_reply_to_text`` (a short preview of the quoted message). When
+``in_reply_to_author`` equals the account number, the operator is replying
+to one of this account's own earlier messages — yours or a sibling agent's.
 When the user asks to see messages or conversation threads, read the A2UI
 chat-surface resources: signal://conversations/a2ui lists buffered
 conversations, and signal://conversation/{id}/a2ui renders one thread as
@@ -113,6 +130,21 @@ _SIZE_UNITS = ("B", "KB", "MB", "GB", "TB")
 _RECEIVE_TIMEOUT = 3600.0
 _INITIAL_BACKOFF = 1.0
 _MAX_BACKOFF = 30.0
+
+
+class _ChannelNotificationParams(NotificationParams):
+    """Params for the (nonstandard) claude/channel notification over HTTP.
+
+    Mirrors the stdio wire shape exactly — ``params.content`` and
+    ``params.meta`` — so hosts consume both transports identically. The
+    SDK's own ``NotificationParams`` drops undeclared keys, so the extra
+    ``content`` field needs this subclass.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    content: str
+    meta: dict[str, str]  # type: ignore[assignment]
 
 
 def _format_size(size: int | None) -> str:
@@ -207,6 +239,15 @@ def _base_meta(msg: MessageResponse) -> dict[str, str]:
         meta["group"] = msg.group_id
     if msg.timestamp is not None:
         meta["timestamp"] = str(msg.timestamp)
+    # Reply metadata (SPEC-0002): present in every channel mode whenever the
+    # message quotes another message; the keys are absent for non-replies.
+    if msg.quote is not None:
+        if msg.quote.timestamp is not None:
+            meta["in_reply_to_timestamp"] = str(msg.quote.timestamp)
+        if msg.quote.author:
+            meta["in_reply_to_author"] = msg.quote.author
+        if msg.quote.text:
+            meta["in_reply_to_text"] = msg.quote.text
     return meta
 
 
@@ -230,7 +271,7 @@ def _channel_notification(content: str, meta: dict[str, str]) -> SessionMessage:
     )
 
 
-def _reaction_notification(msg: MessageResponse) -> SessionMessage | None:
+def _reaction_notification(msg: MessageResponse) -> tuple[str, dict[str, str]] | None:
     """Build the channel notification for an inbound emoji reaction.
 
     The body is a single annotation line in the same bracketed style as
@@ -270,7 +311,7 @@ def _reaction_notification(msg: MessageResponse) -> SessionMessage | None:
     if reaction.is_remove:
         meta["reaction_removed"] = "true"
 
-    return _channel_notification(content, meta)
+    return content, meta
 
 
 def _strip_prefix(text: str, prefix: str) -> str | None:
@@ -290,6 +331,95 @@ def _strip_prefix(text: str, prefix: str) -> str | None:
     if match is None:
         return None
     return stripped[match.end() :].lstrip()
+
+
+def _routing_target(msg: MessageResponse) -> tuple[int | None, str | None]:
+    """The (timestamp, author) a reply or reaction is addressed to.
+
+    A reply resolves through its ``quote``; a reaction through its
+    ``target_timestamp``/``target_author`` — the same keys the dispatch
+    table resolves, whatever the envelope kind.
+    """
+    if msg.reaction is not None:
+        return msg.reaction.target_timestamp, msg.reaction.target_author
+    if msg.quote is not None:
+        return msg.quote.timestamp, msg.quote.author
+    return None, None
+
+
+async def _deliver_to_sessions(
+    dispatch: Dispatch, content: str, meta: dict[str, str]
+) -> bool:
+    """Deliver one channel notification to each recipient session.
+
+    Per-session failures are isolated and logged with the failed session's
+    agent id, and the session is dropped from the registry — a closed
+    stream is how a disconnected HTTP session announces itself — so the
+    agent reads as offline on the next dispatch. Returns True when at least
+    one session received the notification.
+    """
+    delivered = False
+    registry = get_session_registry()
+    for agent_id, session_id, session in dispatch.recipients:
+        send_notification = getattr(session, "send_notification", None)
+        if send_notification is None:
+            logger.warning(
+                "Channel forwarder: recipient session has no "
+                f"send_notification: agent={agent_id} session={session_id}"
+            )
+            registry.unregister(session_id)
+            continue
+        try:
+            await send_notification(
+                Notification(
+                    method="notifications/claude/channel",
+                    params=_ChannelNotificationParams(content=content, meta=meta),
+                )
+            )
+            delivered = True
+        except Exception as e:  # noqa: BLE001
+            logger.warning(
+                "Channel forwarder: failed to dispatch channel notification "
+                f"to agent={agent_id} session={session_id}: {e}"
+            )
+            registry.unregister(session_id)
+    return delivered
+
+
+async def _dispatch_notification(
+    msg: MessageResponse, content: str, meta: dict[str, str], write_stream: Any
+) -> bool:
+    """Deliver one channel notification; returns True when anyone got it.
+
+    In stdio channel mode this is the single write stream, exactly as before
+    routing existed. In HTTP channel mode (``config.routing_enabled``) the
+    recipients come from :func:`resolve_recipients`, and the notification's
+    meta discloses the outcome via ``route_status`` and ``routed_agent``.
+    """
+    if not config.routing_enabled:
+        await write_stream.send(_channel_notification(content, meta))
+        return True
+
+    target_timestamp, target_author = _routing_target(msg)
+    dispatch = resolve_recipients(
+        target_timestamp=target_timestamp,
+        target_author=target_author,
+        account=config.account,
+        routes=get_route_table(),
+        sessions=get_session_registry(),
+        default_agent=config.default_agent or None,
+    )
+    meta = dict(meta)
+    meta["route_status"] = dispatch.route_status
+    if dispatch.routed_agent:
+        meta["routed_agent"] = dispatch.routed_agent
+    logger.info(
+        "Channel forwarder: dispatch route_status=%s routed_agent=%s "
+        f"recipients={len(dispatch.recipients)}",
+        dispatch.route_status,
+        dispatch.routed_agent,
+    )
+    return await _deliver_to_sessions(dispatch, content, meta)
 
 
 async def _forward_channel_messages(write_stream: Any) -> None:
@@ -365,7 +495,8 @@ async def _forward_channel_messages(write_stream: Any) -> None:
                         f"envelope from {msg.sender_id}"
                     )
                     continue
-                await write_stream.send(notification)
+                content, meta = notification
+                await _dispatch_notification(msg, content, meta, write_stream)
                 logger.info(
                     f"Channel forwarder: forwarded reaction from {msg.sender_id}"
                 )
@@ -403,15 +534,18 @@ async def _forward_channel_messages(write_stream: Any) -> None:
             content_parts.extend(_attachment_line(a) for a in msg.attachments)
             content = "\n".join(content_parts)
 
-            notification = _channel_notification(content, _base_meta(msg))
-            await write_stream.send(notification)
+            delivered = await _dispatch_notification(
+                msg, content, _base_meta(msg), write_stream
+            )
             logger.info(f"Channel forwarder: forwarded message from {msg.sender_id}")
 
             # Auto-mark as read so Signal shows the message as delivered/read.
-            # Never for sync-sent traffic: the account itself authored those,
-            # so a receipt would be the account telling itself it had read its
+            # Sent at most once per message, only when someone actually
+            # received it (SPEC-0002 REQ "Single Read Receipt"). Never for
+            # sync-sent traffic: the account itself authored those, so a
+            # receipt would be the account telling itself it had read its
             # own message.
-            if msg.sender_id and msg.timestamp and not msg.is_sync_sent:
+            if delivered and msg.sender_id and msg.timestamp and not msg.is_sync_sent:
                 try:
                     await _send_receipt(msg.sender_id, msg.timestamp)
                 except Exception:  # noqa: BLE001

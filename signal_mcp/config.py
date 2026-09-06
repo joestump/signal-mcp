@@ -1,8 +1,10 @@
 """Configuration for the Signal MCP server: CLI flags, env vars, and logging."""
 
 import argparse
+import ipaddress
 import logging
 import os
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -81,6 +83,23 @@ class SignalConfig:
     history_conversation_cap: int = 50
     # Per-message stored-text cap in bytes (truncation with marker).
     history_text_cap: int = 4096
+    # Reply routing (SPEC-0002). Active only in channel mode over HTTP.
+    # default_agent receives unrouted traffic; empty means fan out to every
+    # live session.
+    default_agent: str = ""
+    route_ttl: int = 604800
+    route_max_entries: int = 10000
+    # Central HTTP channel server (SPEC-0002). auth_token empty means auth is
+    # off — permitted only with --allow-unauthenticated on a loopback bind.
+    http_host: str = "127.0.0.1"
+    http_port: int = 8765
+    auth_token: str = ""
+    allow_unauthenticated: bool = False
+
+    @property
+    def routing_enabled(self) -> bool:
+        """True when reply routing is active (channel mode over HTTP)."""
+        return self.channel_mode and self.transport == "http"
 
 
 # Global config instance shared by all modules.
@@ -181,10 +200,11 @@ def parse_args(argv: list[str] | None = None) -> SignalConfig:
     )
     parser.add_argument(
         "--transport",
-        choices=["sse", "stdio"],
+        choices=["sse", "stdio", "http"],
         default=os.environ.get("SIGNAL_MCP_TRANSPORT", "sse"),
-        help="Transport to use for communication with the client. "
-        "(default: sse, env: SIGNAL_MCP_TRANSPORT)",
+        help="Transport to use for communication with the client. 'http' is "
+        "the streamable-HTTP transport and requires --channel (the central "
+        "channel server). (default: sse, env: SIGNAL_MCP_TRANSPORT)",
     )
     parser.add_argument(
         "--rpc-host",
@@ -320,6 +340,76 @@ def parse_args(argv: list[str] | None = None) -> SignalConfig:
         "(default: 4096, env: SIGNAL_MCP_HISTORY_TEXT_CAP)",
     )
 
+    # Reply routing (SPEC-0002). Owns route table bounds + the default
+    # agent — kept as its own argument group so it can evolve without
+    # colliding with the HTTP server group below.
+    routing_group = parser.add_argument_group(
+        "Reply routing",
+        "Reply routing to the originating agent (SPEC-0002). Active when "
+        "--channel runs with --transport http; harmless elsewhere.",
+    )
+    routing_group.add_argument(
+        "--default-agent",
+        default=os.environ.get("SIGNAL_MCP_DEFAULT_AGENT", ""),
+        help="Agent id that receives unrouted traffic (non-replies, replies "
+        "to unknown timestamps, replies to offline agents). Empty fans "
+        "unrouted traffic out to every live session. "
+        "(env: SIGNAL_MCP_DEFAULT_AGENT)",
+    )
+    routing_group.add_argument(
+        "--route-ttl",
+        type=int,
+        default=int(os.environ.get("SIGNAL_MCP_ROUTE_TTL", "604800")),
+        help="Seconds an outbound-message route stays resolvable. "
+        "(default: 604800 = 7 days, env: SIGNAL_MCP_ROUTE_TTL)",
+    )
+    routing_group.add_argument(
+        "--route-max-entries",
+        type=int,
+        default=int(os.environ.get("SIGNAL_MCP_ROUTE_MAX_ENTRIES", "10000")),
+        help="Maximum route table entries (FIFO eviction when full). "
+        "(default: 10000, env: SIGNAL_MCP_ROUTE_MAX_ENTRIES)",
+    )
+
+    # Central HTTP channel server (SPEC-0002). Auth, bind address, and the
+    # route bounds live in separate groups on purpose: they change on
+    # different cadences and different stories.
+    http_group = parser.add_argument_group(
+        "HTTP server",
+        "Streamable-HTTP endpoint (--transport http, requires --channel). "
+        "Bind to loopback and keep it behind a reverse proxy for TLS when "
+        "exposed across hosts.",
+    )
+    http_group.add_argument(
+        "--host",
+        default=os.environ.get("SIGNAL_MCP_HOST", "127.0.0.1"),
+        help="Bind address for the HTTP transport. "
+        "(default: 127.0.0.1, env: SIGNAL_MCP_HOST)",
+    )
+    http_group.add_argument(
+        "--port",
+        type=int,
+        default=int(os.environ.get("SIGNAL_MCP_PORT", "8765")),
+        help="Port for the HTTP transport. (default: 8765, env: SIGNAL_MCP_PORT)",
+    )
+    http_group.add_argument(
+        "--auth-token",
+        default=os.environ.get("SIGNAL_MCP_AUTH_TOKEN", ""),
+        help="Bearer token every HTTP request must present. Required for "
+        "the HTTP transport unless --allow-unauthenticated is passed with a "
+        "loopback bind. Never logged. (env: SIGNAL_MCP_AUTH_TOKEN)",
+    )
+    http_group.add_argument(
+        "--allow-unauthenticated",
+        action="store_true",
+        default=os.environ.get("SIGNAL_MCP_ALLOW_UNAUTHENTICATED", "").lower()
+        in ("1", "true", "yes"),
+        help="Run the HTTP transport without auth. Only permitted when the "
+        "bind address is loopback — the server can send Signal messages as "
+        "the operator, so it must never listen unauthenticated beyond "
+        "localhost. (env: SIGNAL_MCP_ALLOW_UNAUTHENTICATED)",
+    )
+
     # S3-compatible attachment storage (self-contained block; issue #20).
     # Credentials are resolved exclusively via the standard AWS chain
     # (AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY env vars, shared config files,
@@ -378,11 +468,56 @@ def parse_args(argv: list[str] | None = None) -> SignalConfig:
     if not args.operator:
         parser.error("--operator is required (or set SIGNAL_MCP_OPERATOR)")
     # choices isn't enforced for values coming from a default (i.e. the env var).
-    if args.transport not in ("sse", "stdio"):
+    if args.transport not in ("sse", "stdio", "http"):
         parser.error(
             f"invalid transport {args.transport!r} "
-            "(set SIGNAL_MCP_TRANSPORT to 'sse' or 'stdio')"
+            "(set SIGNAL_MCP_TRANSPORT to 'sse', 'stdio', or 'http')"
         )
+    if args.channel and args.transport == "sse":
+        # The bare `--channel` invocation (no --transport) defaults to sse and
+        # is coerced to stdio below, exactly as before this spec; only an
+        # explicitly requested sse (flag or env) is refused.
+        argv = argv if argv is not None else sys.argv[1:]
+        explicit_sse = os.environ.get("SIGNAL_MCP_TRANSPORT", "") == "sse" or any(
+            (arg == "--transport" and i + 1 < len(argv) and argv[i + 1] == "sse")
+            or (arg.startswith("--transport=") and arg.split("=", 1)[1] == "sse")
+            for i, arg in enumerate(argv)
+        )
+        if explicit_sse:
+            parser.error(
+                "--channel does not support the sse transport: use --transport "
+                "stdio (single agent on this machine) or --transport http (the "
+                "central channel server with reply routing)"
+            )
+    if args.transport == "http" and not args.channel:
+        parser.error("--transport http requires --channel")
+    if args.route_ttl <= 0:
+        parser.error(
+            f"invalid --route-ttl {args.route_ttl} "
+            "(must be a positive number of seconds)"
+        )
+    if args.route_max_entries <= 0:
+        parser.error(
+            f"invalid --route-max-entries {args.route_max_entries} "
+            "(must be a positive integer)"
+        )
+    if not args.auth_token and not args.allow_unauthenticated:
+        if args.transport == "http":
+            parser.error(
+                "--transport http requires --auth-token (or "
+                "SIGNAL_MCP_AUTH_TOKEN); pass --allow-unauthenticated to run "
+                "unauthenticated on loopback"
+            )
+    if args.allow_unauthenticated and not args.auth_token:
+        try:
+            loopback = ipaddress.ip_address(args.host).is_loopback
+        except ValueError:
+            loopback = args.host in ("localhost", "*") and args.host != "*"
+        if not loopback:
+            parser.error(
+                "--allow-unauthenticated is only permitted on a loopback bind "
+                f"(got --host {args.host!r})"
+            )
     log_level = args.log_level.upper()
     if log_level not in LOG_LEVELS:
         parser.error(
@@ -425,6 +560,13 @@ def parse_args(argv: list[str] | None = None) -> SignalConfig:
     config.history_message_cap = args.history_message_cap
     config.history_conversation_cap = args.history_conversation_cap
     config.history_text_cap = args.history_text_cap
+    config.default_agent = args.default_agent
+    config.route_ttl = args.route_ttl
+    config.route_max_entries = args.route_max_entries
+    config.http_host = args.host
+    config.http_port = args.port
+    config.auth_token = args.auth_token
+    config.allow_unauthenticated = args.allow_unauthenticated
 
     # Tri-state path-style: flag/env win when given; otherwise default to
     # path-style whenever a custom endpoint is configured (Garage and MinIO
@@ -440,8 +582,9 @@ def parse_args(argv: list[str] | None = None) -> SignalConfig:
     config.s3_presign_ttl = args.s3_presign_ttl
     config.s3_force_path_style = force_path_style
 
-    # Channel mode always talks to Claude over stdio.
-    if config.channel_mode:
+    # Channel mode defaults to the single-agent stdio shape; an explicitly
+    # requested HTTP transport is honored (the central channel server).
+    if config.channel_mode and config.transport == "sse":
         config.transport = "stdio"
 
     return config

@@ -6,8 +6,25 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from signal_mcp.config import config
+from signal_mcp.routing import truncate_utf8
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class Quote:
+    """The quoted message a reply references (``dataMessage.quote``).
+
+    ``timestamp`` is the quoted message's Signal timestamp (``quote.id``) —
+    the routing key SPEC-0002 resolves against the route table. ``author``
+    is the quoted message's author (``quote.author``, falling back to
+    ``quote.authorNumber``). ``text`` is the quoted body, truncated to at
+    most 256 bytes at a UTF-8 character boundary.
+    """
+
+    timestamp: int | None = None
+    author: str | None = None
+    text: str | None = None
 
 
 @dataclass
@@ -61,6 +78,9 @@ class MessageResponse:
     # to react to this message.
     timestamp: int | None = None
     reaction: Reaction | None = None
+    # The message this one replies to (``quote`` on the content object), or
+    # ``None`` when it is not a reply.
+    quote: Quote | None = None
     # File attachments on the message; empty when there are none.
     attachments: list[Attachment] = field(default_factory=list)
     # True when the envelope arrived via ``syncMessage.sentMessage`` —
@@ -137,6 +157,27 @@ def _parse_attachments(raw: Any, attachments_dir: str) -> list[Attachment]:
     return attachments
 
 
+def _parse_quote(raw: Any) -> Quote | None:
+    """Parse a ``quote`` object into a :class:`Quote`, or ``None`` when absent.
+
+    Never changes actionability: this runs on content that was already
+    decided actionable, and a malformed quote simply yields ``None``.
+    """
+    if not isinstance(raw, dict):
+        return None
+    timestamp = raw.get("id")
+    try:
+        parsed_timestamp = int(timestamp) if timestamp is not None else None
+    except (TypeError, ValueError):
+        # A non-numeric quote id must not make the envelope unparseable.
+        parsed_timestamp = None
+    return Quote(
+        timestamp=parsed_timestamp,
+        author=raw.get("author") or raw.get("authorNumber"),
+        text=truncate_utf8(raw.get("text") or "") or None,
+    )
+
+
 def _envelope_to_response(
     payload: dict[str, Any], attachments_dir: str | None = None
 ) -> MessageResponse | None:
@@ -188,6 +229,8 @@ def _envelope_to_response(
     group = group_info.get("groupId")
     timestamp = content.get("timestamp") or envelope.get("timestamp")
 
+    quote = _parse_quote(content.get("quote"))
+
     reaction = content.get("reaction")
     if reaction:
         emoji = reaction.get("emoji")
@@ -206,6 +249,7 @@ def _envelope_to_response(
                 target_timestamp=reaction.get("targetSentTimestamp"),
                 is_remove=reaction.get("isRemove", False),
             ),
+            quote=quote,
             is_sync_sent=is_sync_sent,
             destination=destination,
         )
@@ -228,6 +272,7 @@ def _envelope_to_response(
             group_id=group,
             timestamp=timestamp,
             attachments=attachments,
+            quote=quote,
             is_sync_sent=is_sync_sent,
             destination=destination,
         )

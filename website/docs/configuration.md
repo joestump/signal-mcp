@@ -38,10 +38,10 @@ flag wins when both are set.
 |----------|---------|---------|-------------|
 | `--operator` *(required)* | `SIGNAL_MCP_OPERATOR` | — | E.164 number of the human the agent serves (who it messages / listens to). |
 | `--account` | `SIGNAL_MCP_ACCOUNT` | *(= `--operator`)* | E.164 number the MCP runs **as** (the daemon's `-a`); messages are sent from it. |
-| `--transport` | `SIGNAL_MCP_TRANSPORT` | `sse` | Transport: `sse` or `stdio` (use `stdio` for Claude Desktop/Code). |
+| `--transport` | `SIGNAL_MCP_TRANSPORT` | `sse` | Transport: `sse`, `stdio` (use for Claude Desktop/Code), or `http` (requires `--channel`; see [Reply Routing](./reply-routing)). |
 | `--rpc-host` | `SIGNAL_MCP_RPC_HOST` | `127.0.0.1` | Host of the signal-cli daemon JSON-RPC interface. |
 | `--rpc-port` | `SIGNAL_MCP_RPC_PORT` | `7583` | Port of the signal-cli daemon JSON-RPC interface. |
-| `--channel` | `SIGNAL_MCP_CHANNEL` | `false` | Enable [Claude Channel mode](./channel-mode) (forces stdio). |
+| `--channel` | `SIGNAL_MCP_CHANNEL` | `false` | Enable [Claude Channel mode](./channel-mode) (stdio by default; `--transport http` for the central server). |
 | `--prefix` | `SIGNAL_MCP_PREFIX` | *(none)* | Only forward messages starting with this prefix (channel mode); stripped before delivery. |
 | `--trusted-recipient` | `SIGNAL_MCP_TRUSTED_RECIPIENTS` | *(none)* | Outbound allowlist — numbers/group ids the agent may message. Repeatable flag; comma-separated env var. Empty = all allowed. |
 | `--trusted-sender` | `SIGNAL_MCP_TRUSTED_SENDERS` | *(none)* | Inbound allowlist — authors whose messages reach the agent (channel mode). Defaults to `--operator` when unset. |
@@ -50,6 +50,21 @@ flag wins when both are set.
 | `--attachment-transfer` | `SIGNAL_MCP_ATTACHMENT_TRANSFER` | `auto` | How outbound attachments reach the daemon: `path`, `data-uri`, or `auto`. |
 | `--attachment-max-bytes` | `SIGNAL_MCP_ATTACHMENT_MAX_BYTES` | `26214400` | Largest local file encodable as a data URI (25 MB). |
 | `--log-level` | `SIGNAL_MCP_LOG_LEVEL` | `INFO` | `DEBUG`, `INFO`, `WARNING`, `ERROR`, or `CRITICAL`. |
+
+### Reply routing / HTTP channel server
+
+These apply when running [central HTTP channel mode](./reply-routing)
+(`--channel --transport http`); they are harmless elsewhere.
+
+| Argument | Env var | Default | Description |
+|----------|---------|---------|-------------|
+| `--host` | `SIGNAL_MCP_HOST` | `127.0.0.1` | HTTP bind address. |
+| `--port` | `SIGNAL_MCP_PORT` | `8765` | HTTP bind port. |
+| `--auth-token` | `SIGNAL_MCP_AUTH_TOKEN` | *(none)* | Required bearer token; the server refuses to start without it unless `--allow-unauthenticated` is paired with a loopback bind. Never logged. |
+| `--allow-unauthenticated` | `SIGNAL_MCP_ALLOW_UNAUTHENTICATED` | `false` | Run the HTTP transport without auth — loopback binds only. |
+| `--default-agent` | `SIGNAL_MCP_DEFAULT_AGENT` | *(none)* | Agent id that receives unrouted traffic; empty fans out to every live session. |
+| `--route-ttl` | `SIGNAL_MCP_ROUTE_TTL` | `604800` | Seconds an outbound-message route stays resolvable (7 days). |
+| `--route-max-entries` | `SIGNAL_MCP_ROUTE_MAX_ENTRIES` | `10000` | Route table cap; oldest entries evicted first. |
 
 S3-backed attachment storage adds a further `--s3-*` group; see the `--help`
 output.
