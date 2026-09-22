@@ -18,3 +18,7 @@ htmlcov/
 
 # Design mockups pulled from claude.ai/design (not committed)
 website/design/
+
+# Local agent worktrees (Claude Code and ad-hoc PR-review checkouts)
+.claude/worktrees/
+.pr-review-*/
