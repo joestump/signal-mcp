@@ -80,7 +80,7 @@ For S3 attachment offloading (see [Configuration](configuration)), install the `
 uv tool install "signal-mcp[s3] @ git+https://github.com/joestump/signal-mcp"
 ```
 
-:::tip Zero-install
+:::tip[Zero-install]
 Don't want a persistent install? `uvx` builds and runs it straight from GitHub
 into a cache — this is the form used in the Claude Code config below:
 
