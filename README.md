@@ -17,6 +17,7 @@ reactions — through a long-running `signal-cli daemon`.
   - [Configuration](#configuration)
   - [Restricting recipients](#restricting-recipients-trusted-recipients)
   - [Restricting senders](#restricting-senders-inbound-security)
+  - [Registration Lock](#locking-trusted-numbers-registration-lock)
   - [S3 attachment storage](#s3-compatible-attachment-storage-optional)
 - [Using with Claude](#using-with-claude-mcp-client-setup)
 - [Claude Channel mode](#claude-channel-mode)
@@ -237,6 +238,42 @@ the gate behaves:
   messages straight into context.
 
 This is separate from `--trusted-recipient`, which restricts *outbound* sends.
+
+### Locking trusted numbers (Registration Lock)
+
+Both allowlists trust **phone numbers**, and a phone number is only as safe as
+the carrier account behind it. Someone who takes over a trusted number — a SIM
+swap, a fraudulent port-out — can register Signal on it and *become* that
+sender. Re-registering keeps the same Signal account, so the trusted-sender
+gate cannot tell the difference and forwards their messages straight to the
+agent.
+
+Signal's **Registration Lock** closes that gap: registering the number on a new
+device then requires the account's Signal PIN, which a hijacked SIM does not
+carry. Turn it on for every number the agent trusts:
+
+- **Every trusted sender, `--operator` included.** Each person enables it on
+  their own phone under *Signal Settings → Account → Registration Lock*. When you
+  add someone with `--trusted-sender`, tell them their number can now reach your
+  agent, and ask them to turn it on.
+- **The agent's own number (`--account`), when it has one.** If signal-cli
+  *registered* the number, set the lock from signal-cli. The daemon holds the
+  account lock, so stop it first and restart it afterwards:
+
+  ```bash
+  read -rs PIN   # prompts without echoing, so the PIN stays out of shell history
+  signal-cli -a ACCOUNT_NUMBER setPin "$PIN"
+  unset PIN
+  ```
+
+  If signal-cli is *linked* to a phone instead, the phone is the primary
+  device — set the lock there.
+
+Keep the PIN in a password manager: Signal cannot reset it, and a forgotten PIN
+with Registration Lock on can lock you out of the number for up to 7 days. The
+lock also expires after 7 days of inactivity, so keep a dedicated agent number's
+daemon running — a number left offline for a week loses its protection. See Signal's
+[PIN and Registration Lock FAQ](https://support.signal.org/hc/en-us/articles/360007059792-Signal-PIN).
 
 ### S3-compatible attachment storage (optional)
 

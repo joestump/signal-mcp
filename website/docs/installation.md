@@ -30,6 +30,35 @@ signal-cli link --qr-url-output qrcode.png
 
 signal-cli will print a phone number to use for `--account` going forward.
 
+### Lock the number (Registration Lock)
+
+The agent trusts phone numbers. Anyone who hijacks a trusted number (a SIM swap
+or a fraudulent port-out) can register Signal on it and *become* that sender,
+and the [trusted-sender gate](configuration#trusted-recipients--senders) will
+forward their messages to the agent. Signal's **Registration Lock** blocks this:
+registering the number on a new device then requires the account's Signal PIN.
+
+- **Your phone, and everyone you list with `--trusted-sender`:** *Signal Settings
+  → Account → Registration Lock*. Each person does it on their own phone.
+- **A dedicated agent number registered with signal-cli:** set the lock from
+  signal-cli. Run it before starting the daemon (or stop the daemon first, since
+  it holds the account lock):
+
+  ```bash
+  read -rs PIN   # prompts without echoing, so the PIN stays out of shell history
+  signal-cli -a YOUR_PHONE_NUMBER setPin "$PIN"
+  unset PIN
+  ```
+
+  A *linked* signal-cli inherits the account of the phone it is linked to — set
+  the lock on that phone.
+
+Keep the PIN in a password manager. Signal cannot reset it, and a forgotten PIN
+with Registration Lock on can lock you out for up to 7 days. The lock also
+expires after 7 days of inactivity, so keep a dedicated agent number's daemon
+running. See Signal's
+[PIN and Registration Lock FAQ](https://support.signal.org/hc/en-us/articles/360007059792-Signal-PIN).
+
 ## Install Signal MCP
 
 No clone required — install straight from GitHub with `uv`. This puts a
