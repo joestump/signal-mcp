@@ -81,6 +81,14 @@ The two allowlists are **security gates**, not address books:
   listed authors are forwarded to the agent. When unset, only the `operator` is
   trusted (deny-by-default).
 
+:::warning[Lock every number you trust]
+Both gates trust **phone numbers**. A number taken over by a SIM swap or a
+port-out can be re-registered on Signal, and its new holder passes the gate as
+that sender. Turn on Signal **Registration Lock** for the operator, every
+trusted sender, and the agent's own `--account` — see
+[Lock the number](installation#lock-the-number-registration-lock).
+:::
+
 ## Example configs
 
 ### Minimal (SSE, Note to Self)
