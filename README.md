@@ -40,6 +40,9 @@ reactions — through a long-running `signal-cli daemon`.
   "Note to Self" reaction syncs that plain-text parsing can't recover
 - Push inbound emoji reactions to the agent in channel mode — react to the
   bot's message from your phone and it sees `[reaction: 👍 …]` in real time
+- Keep Signal @-mentions: received bodies name who was mentioned where the
+  mention stood, and `@[<uuid>]` in a message you send goes out as a real
+  mention
 - Restrict who the server may message with a trusted-recipients allowlist
 - Gate inbound messages on a trusted-senders allowlist — deny-by-default in
   channel mode, so strangers can't inject prompts into the agent's context
@@ -661,6 +664,29 @@ Send a message to a group.
 - `attachments` *(list[str], optional)* — attachments to send (see
   [Attachments](#attachments)).
 
+### Mentions
+
+Signal stores a mention in `bodyRanges`: an entry saying which span of the body
+refers to which account, identified by UUID. signal-mcp translates in both
+directions between that protocol and the plain text you read and write.
+
+- **Received** — each mention is written into `message` exactly where it stood,
+  as `@[<uuid>]` (or `@[name]` where a display name is known), so the body no
+  longer reads as a stray replacement character. The `mentions` field lists the
+  mentioned accounts in body order.
+- **Sent** — write `@[<uuid>]` where the mention should read and the message
+  goes out as a real Signal mention of that account. The span becomes the
+  character Signal clients use for a mention plus the matching `bodyRanges`
+  entry, so no offset arithmetic is needed (Signal counts those offsets in
+  UTF-16 code units; signal-mcp does that part). Anything that is not an exact
+  canonical UUID in that form, such as a bare `@name` or a `[<uuid>]` without
+  the `@`, stays ordinary text.
+
+Round-tripping works: send a received body back unchanged and the same accounts
+are mentioned again. Mention UUIDs come from received messages
+(`mentions[].uuid`) or your own contact list; signal-mcp does not look up
+display names itself.
+
 ### Attachments
 
 Each entry in an `attachments` list is one of:
@@ -764,13 +790,26 @@ can tell the two apart:
   "group_id": "GROUP_ID==",       // group id if it was a group message, else null
   "timestamp": 1744185565466,     // ms; pass back as target_timestamp to react
   "reaction": null,               // or a Reaction object (see below)
-  "attachments": []               // Attachment objects (see below), if any
+  "attachments": [],              // Attachment objects (see below), if any
+  "mentions": []                  // Mention objects (see below), if any
 }
 ```
 
 > **Breaking change:** this field was previously named `group_name` (it always
 > carried the group *id*), and failures were previously reported via an `error`
 > field. Failures are now raised as MCP tool errors instead.
+
+When the body @-mentions someone, `mentions` holds one entry per mention, in
+body order, and `message` carries the same mention written in place:
+
+```jsonc
+{
+  "uuid": "0f1e2d3c-4b5a-6789-abcd-ef0123456789", // who is mentioned
+  "start": 6,        // offset into the raw body, in UTF-16 code units
+  "length": 1,       // span length, likewise
+  "name": null       // display name when known, else null
+}
+```
 
 When the message is a reaction, `reaction` holds:
 

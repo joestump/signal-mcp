@@ -108,6 +108,12 @@ message's Signal timestamp), ``in_reply_to_author``, and
 ``in_reply_to_text`` (a short preview of the quoted message). When
 ``in_reply_to_author`` equals the account number, the operator is replying
 to one of this account's own earlier messages — yours or a sibling agent's.
+A message that @-mentions someone carries each mention written as
+``@[uuid]`` (or ``@[name]`` where a display name is known) exactly where the
+mentioned account stood in the body, and ``meta.mentions`` lists those
+mentions in body order. To mention someone in a message you send, write that
+same ``@[uuid]`` form in the text and it is delivered as a real Signal
+mention.
 When the user asks to see messages or conversation threads, read the A2UI
 chat-surface resources: signal://conversations/a2ui lists buffered
 conversations, and signal://conversation/{id}/a2ui renders one thread as
@@ -216,7 +222,10 @@ def _base_meta(msg: MessageResponse) -> dict[str, str]:
     ``sender_name`` and ``group`` are added only when set. ``timestamp``
     carries the inbound message's Signal timestamp as a string — it is the
     value to pass back as ``target_timestamp`` to ``send_reaction_to_user`` /
-    ``send_reaction_to_group`` to react to this specific message. Callers may
+    ``send_reaction_to_group`` to react to this specific message. ``mentions``
+    is added only when the body mentions accounts: the mentioned identities in
+    body order, a display name when one is known and otherwise the UUID, which
+    is also the form a reply needs to mention them back. Callers may
     extend the returned dict with event-specific fields (e.g. reaction
     details).
     """
@@ -248,6 +257,10 @@ def _base_meta(msg: MessageResponse) -> dict[str, str]:
             meta["in_reply_to_author"] = msg.quote.author
         if msg.quote.text:
             meta["in_reply_to_text"] = msg.quote.text
+    if msg.mentions:
+        meta["mentions"] = ", ".join(
+            mention.name or mention.uuid for mention in msg.mentions
+        )
     return meta
 
 
