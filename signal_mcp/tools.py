@@ -33,7 +33,7 @@ from signal_mcp.history import (
     conversation_key,
     record_outbound,
 )
-from signal_mcp.parse import MessageResponse
+from signal_mcp.parse import MessageResponse, mentions_to_body_ranges
 from signal_mcp.prompts import register_prompts
 from signal_mcp.routing import (
     get_route_table,
@@ -654,10 +654,17 @@ async def _send_message(
     ``attachments`` entries must already be prepared (see
     :func:`_prepare_attachments`); they are passed to the daemon as the
     ``"attachments"`` array. The message text may be empty when attachments
-    are present. Raises :class:`SignalCLIError` on failure.
+    are present. A ``@[<uuid>]`` span in the text is delivered as a real Signal
+    mention: it becomes the replacement character Signal clients put there plus
+    the matching ``bodyRanges`` entry (see
+    :func:`signal_mcp.parse.mentions_to_body_ranges`). Raises
+    :class:`SignalCLIError` on failure.
     """
     target_type = "group" if is_group else "user"
-    params: dict[str, Any] = {"message": message}
+    body, body_ranges = mentions_to_body_ranges(message)
+    params: dict[str, Any] = {"message": body}
+    if body_ranges:
+        params["bodyRanges"] = body_ranges
     if attachments:
         params["attachments"] = attachments
     if is_group:
@@ -797,7 +804,9 @@ async def send_message_to_user(
     2397 ``data:`` URIs (``data:<MIME>;filename=<NAME>;base64,<DATA>``). File
     paths are read on this server's host; URLs are downloaded by the server;
     when the daemon is remote, files are embedded as data URIs automatically.
-    ``message`` may be empty when attachments are provided.
+    ``message`` may be empty when attachments are provided. To mention an
+    account, write ``@[<uuid>]`` where the mention should read: it is delivered
+    as a real Signal mention of that account.
     """
     logger.info(f"Tool called: send_message_to_user for user {user_id}")
     _ensure_trusted(user_id)
@@ -817,7 +826,9 @@ async def send_message_to_group(
     receive_message) or its display name. ``attachments`` is an optional list
     of file paths (read on this server's host; embedded as data URIs when the
     daemon is remote), ``http(s)`` URLs (downloaded by the server), or RFC 2397
-    ``data:`` URIs; ``message`` may be empty when attachments are provided.
+    ``data:`` URIs; ``message`` may be empty when attachments are provided. To
+    mention an account, write ``@[<uuid>]`` where the mention should read: it is
+    delivered as a real Signal mention of that account.
     """
     logger.info(f"Tool called: send_message_to_group for group {group_id}")
     gid = await _ensure_trusted_group(group_id)
@@ -894,7 +905,9 @@ async def send(message: str, attachments: list[str] | None = None) -> dict[str, 
     operator's number. ``attachments`` is an optional list of file paths (read
     on this server's host; embedded as data URIs when the daemon is remote),
     ``http(s)`` URLs (downloaded by the server), or RFC 2397 ``data:`` URIs;
-    ``message`` may be empty when attachments are provided.
+    ``message`` may be empty when attachments are provided. To mention an
+    account, write ``@[<uuid>]`` where the mention should read: it is delivered
+    as a real Signal mention of that account.
     """
     logger.info("Tool called: send")
     if not config.operator:
@@ -924,6 +937,12 @@ async def receive_message(timeout: float = 60.0) -> MessageResponse:
     presigned GET URL when S3 storage is enabled (else null; download it and
     read the file). An attachment-only message (e.g. a bare image) has
     ``message`` null but ``attachments`` populated.
+
+    An @-mention is written into ``message`` where it stood, as ``@[<uuid>]``
+    (or ``@[name]`` where a display name is known), and ``mentions`` lists the
+    mentioned accounts in body order with their ``uuid``, UTF-16 ``start`` and
+    ``length`` offsets into the raw body. Passing a ``@[<uuid>]`` span back to a
+    send tool reproduces the mention.
 
     When a trusted-senders allowlist is configured, messages from other
     authors are skipped (with a log line) and the call keeps waiting within

@@ -2,6 +2,8 @@
 
 import logging
 import os
+import re
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -9,6 +11,19 @@ from signal_mcp.config import config
 from signal_mcp.routing import truncate_utf8
 
 logger = logging.getLogger(__name__)
+
+# Signal clients replace the "@name" text of a mention with this single
+# character in the message body; the mentioned identity lives in the matching
+# ``bodyRanges`` entry instead (see :class:`Mention`).
+MENTION_PLACEHOLDER = "\ufffc"
+
+# The inline mention grammar understood on the send path: a canonical UUID
+# wrapped in "@[...]" (see :func:`mentions_to_body_ranges`). Requiring the
+# canonical 8-4-4-4-12 hex form keeps ordinary text intact.
+_MENTION_SPAN = re.compile(
+    r"@\[(?P<uuid>[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\]",
+    re.IGNORECASE,
+)
 
 
 @dataclass
@@ -60,6 +75,24 @@ class Attachment:
 
 
 @dataclass
+class Mention:
+    """One ``bodyRanges`` entry that names an account in a message.
+
+    ``start`` and ``length`` are offsets into the *raw* body counted in UTF-16
+    code units (Signal's unit, so an emoji occupies two and the offsets do not
+    index a Python ``str`` directly), and ``length`` normally covers the single
+    object-replacement character the client substituted for the ``@name`` text.
+    ``name`` is a display name when one is known; a received payload carries
+    only the UUID, so the UUID stands in when the body is rendered.
+    """
+
+    uuid: str
+    start: int | None = None
+    length: int | None = None
+    name: str | None = None
+
+
+@dataclass
 class MessageResponse:
     """Structured result for received messages and reactions.
 
@@ -91,6 +124,10 @@ class MessageResponse:
     # (``sentMessage.destination`` / ``destinationNumber``). ``None`` for
     # group traffic (the group id is already on ``group_id``).
     destination: str | None = None
+    # Accounts mentioned in the body, in body order; empty when there are
+    # none. ``message`` carries each mention rendered in place of the
+    # replacement character Signal put there (see :func:`render_mentions`).
+    mentions: list[Mention] = field(default_factory=list)
 
 
 def _resolve_attachment_path(attachment_id: str, attachments_dir: str) -> str | None:
@@ -157,6 +194,139 @@ def _parse_attachments(raw: Any, attachments_dir: str) -> list[Attachment]:
     return attachments
 
 
+def _utf16_length(text: str) -> int:
+    """Length of ``text`` in UTF-16 code units, the unit Signal offsets use."""
+    return sum(2 if ord(character) > 0xFFFF else 1 for character in text)
+
+
+def _utf16_str_index(body: str, unit_offset: int) -> int | None:
+    """Map a UTF-16 code-unit offset to an index into ``body``.
+
+    Returns ``None`` when the offset falls outside the body or between the two
+    halves of a surrogate pair, which is not a range the protocol produces.
+    """
+    if unit_offset < 0:
+        return None
+    offset = 0
+    for index, character in enumerate(body):
+        if offset == unit_offset:
+            return index
+        if offset > unit_offset:
+            return None
+        offset += 2 if ord(character) > 0xFFFF else 1
+    return len(body) if offset == unit_offset else None
+
+
+def _as_int(value: Any) -> int | None:
+    """Coerce a wire value to ``int``, or ``None`` when it is not one."""
+    try:
+        return int(value) if value is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _parse_body_ranges(raw: Any) -> list[Mention]:
+    """Parse the ``bodyRanges`` array of a signal-cli message.
+
+    Each mention looks like ``{"start": 6, "length": 1, "mentionUuid":
+    "<uuid>"}``. Entries without a ``mentionUuid`` are style or short-code
+    ranges and are ignored, and a malformed entry is skipped rather than
+    making the whole envelope unparseable.
+    """
+    mentions: list[Mention] = []
+    for item in raw or []:
+        if not isinstance(item, dict):
+            continue
+        uuid = item.get("mentionUuid")
+        if not uuid:
+            continue
+        mentions.append(
+            Mention(
+                uuid=str(uuid),
+                start=_as_int(item.get("start")),
+                length=_as_int(item.get("length")),
+            )
+        )
+    return mentions
+
+
+def render_mentions(body: str, mentions: Sequence[Mention]) -> str:
+    """Replace each mention's replacement-character span with a readable form.
+
+    A received body says only "something was mentioned here": the name lives
+    in ``bodyRanges``, so the raw text reads as a stray replacement character.
+    Each span that is exactly that character becomes ``@[name]``, falling back
+    to the UUID when no display name is known. A span holding anything else,
+    such as a client that keeps the literal ``@name`` text, is left as
+    received, and so is any mention whose offsets do not resolve inside the
+    body.
+    """
+    if not body or not mentions:
+        return body
+
+    spans: list[tuple[int, int, str]] = []
+    for mention in mentions:
+        if mention.start is None:
+            continue
+        length = mention.length if mention.length is not None else 1
+        start = _utf16_str_index(body, mention.start)
+        end = _utf16_str_index(body, mention.start + length)
+        if start is None or end is None or end <= start:
+            continue
+        if body[start:end] != MENTION_PLACEHOLDER:
+            continue
+        spans.append((start, end, f"@[{mention.name or mention.uuid}]"))
+
+    parts: list[str] = []
+    cursor = 0
+    last_end = 0
+    seen: set[tuple[int, int]] = set()
+    for start, end, marker in sorted(spans):
+        if (start, end) in seen or start < last_end:
+            continue
+        seen.add((start, end))
+        parts.append(body[cursor:start])
+        parts.append(marker)
+        cursor = end
+        last_end = end
+    parts.append(body[cursor:])
+    return "".join(parts)
+
+
+def mentions_to_body_ranges(
+    message: str,
+) -> tuple[str, list[dict[str, Any]]]:
+    """Rewrite ``@[<uuid>]`` spans into the form signal-cli sends.
+
+    The counterpart of :func:`render_mentions`: a caller names who is meant
+    where the text reads ``@[<uuid>]``, and gets back the body to send (each
+    span replaced by the object-replacement character Signal clients use, so
+    the receiving client renders a real mention) plus the ``bodyRanges`` array
+    to pass along with it. Offsets are UTF-16 code units. Anything that is not
+    an exact canonical-UUID span is left untouched as ordinary text.
+    """
+    parts: list[str] = []
+    ranges: list[dict[str, Any]] = []
+    cursor = 0
+    units = 0
+    for match in _MENTION_SPAN.finditer(message):
+        prefix = message[cursor : match.start()]
+        parts.append(prefix)
+        parts.append(MENTION_PLACEHOLDER)
+        units += _utf16_length(prefix)
+        ranges.append(
+            {
+                "start": units,
+                "length": 1,
+                "mentionUuid": match.group("uuid").lower(),
+            }
+        )
+        units += 1
+        cursor = match.end()
+    parts.append(message[cursor:])
+    return "".join(parts), ranges
+
+
 def _parse_quote(raw: Any) -> Quote | None:
     """Parse a ``quote`` object into a :class:`Quote`, or ``None`` when absent.
 
@@ -165,14 +335,9 @@ def _parse_quote(raw: Any) -> Quote | None:
     """
     if not isinstance(raw, dict):
         return None
-    timestamp = raw.get("id")
-    try:
-        parsed_timestamp = int(timestamp) if timestamp is not None else None
-    except (TypeError, ValueError):
-        # A non-numeric quote id must not make the envelope unparseable.
-        parsed_timestamp = None
+    # A non-numeric quote id must not make the envelope unparseable.
     return Quote(
-        timestamp=parsed_timestamp,
+        timestamp=_as_int(raw.get("id")),
         author=raw.get("author") or raw.get("authorNumber"),
         text=truncate_utf8(raw.get("text") or "") or None,
     )
@@ -258,15 +423,18 @@ def _envelope_to_response(
         attachments_dir = config.attachments_dir
     attachments = _parse_attachments(content.get("attachments"), attachments_dir)
 
+    mentions = _parse_body_ranges(content.get("bodyRanges"))
+
     body = content.get("message")
     if body or attachments:
         logger.info(
             f"Parsed message from {sender}"
             + (f" in group {group}" if group else "")
             + (f" with {len(attachments)} attachment(s)" if attachments else "")
+            + (f" mentioning {len(mentions)} account(s)" if mentions else "")
         )
         return MessageResponse(
-            message=body or None,
+            message=render_mentions(body, mentions) if body else None,
             sender_id=sender,
             sender_name=sender_name,
             group_id=group,
@@ -275,6 +443,7 @@ def _envelope_to_response(
             quote=quote,
             is_sync_sent=is_sync_sent,
             destination=destination,
+            mentions=mentions,
         )
 
     return None

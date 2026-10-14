@@ -91,6 +91,10 @@ Returns a `MessageResponse` with either:
 - **Reaction**: `reaction` (emoji, target_author, target_timestamp, is_remove)
 - **Timeout**: empty response (all fields `None`)
 
+An @-mentioned account also appears in `mentions` (uuid, UTF-16 `start`/`length`,
+`name` when known), and the same mention is written into `message` where it
+stood, as `@[<uuid>]`.
+
 ```python
 result = await receive_message(timeout=30.0)
 if result.message:
@@ -98,6 +102,17 @@ if result.message:
 elif result.reaction:
     print(f"Got reaction: {result.reaction.emoji}")
 ```
+
+## Mentions
+
+Signal keeps a mention in `bodyRanges` rather than in the body text, where the
+`@name` is replaced by a placeholder character. Every send tool understands the
+inline form `@[<uuid>]`: write it where the mention should read and the message
+goes out as a real Signal mention of that account, with signal-mcp building the
+`bodyRanges` entry and its UTF-16 offsets. Text that is not an exact canonical
+UUID in that form (a bare `@name`, or a `[<uuid>]` without the `@`) is sent as
+ordinary text. A received body can be sent straight back to mention the same
+accounts again.
 
 ## `mark_read`
 

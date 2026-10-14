@@ -150,6 +150,10 @@ Incoming messages arrive in Claude's context as `<channel>` tags:
 
 When the operator replies to one of the agent's messages, the notification `meta` also carries `in_reply_to_timestamp` (the quoted message's Signal timestamp), `in_reply_to_author`, and `in_reply_to_text` (a short preview of the quoted message). A reply whose `in_reply_to_author` equals the account number is a reply to one of your own messages. Notifications for messages that are not replies carry none of these keys.
 
+## Mentions
+
+A message that @-mentions someone arrives with each mention written into the body where it stood, as `@[<uuid>]` (or `@[name]` where a display name is known), instead of the replacement character Signal puts there; `meta.mentions` lists those mentions in body order. To mention someone in a reply, write the same `@[<uuid>]` form where the mention should read and it is delivered as a real Signal mention. See [Mentions](tools.md#mentions) for the send-side details.
+
 ## Reply tools
 
 Agents have two ways to respond:
