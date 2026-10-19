@@ -103,6 +103,17 @@ elif result.reaction:
     print(f"Got reaction: {result.reaction.emoji}")
 ```
 
+## `a2ui_action`
+
+Handle an interaction with an A2UI surface this server rendered. A2UI-capable hosts deliver Button presses on the chat surfaces as a call to this tool. It is dispatched exclusively through the same send paths as the tools above and enforces the same trusted-recipients allowlist — an action targeting an untrusted recipient fails exactly like the direct tool call.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `name` | `str` | Yes | Action name carried by the button (`reply` or `react`) |
+| `context` | `dict` | No | Button context with host-resolved bindings: `conversation_id`, plus `target_author` / `target_timestamp` for `react` (optionally `emoji`, default 👍, and `remove`) and `message` for `reply` |
+
+The `context` is host-supplied data: it names a target, it does not grant permission to message it.
+
 ## Mentions
 
 Signal keeps a mention in `bodyRanges` rather than in the body text, where the

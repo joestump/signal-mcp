@@ -918,6 +918,130 @@ async def send(message: str, attachments: list[str] | None = None) -> dict[str, 
     return {"message": "Message sent successfully"}
 
 
+# A conversation key that is an E.164 number is a DM; anything else (group id
+# or display name) is group-shaped. signal-cli always reports numbers in
+# plus-prefixed form, so the shape rule is safe for keys derived from traffic.
+_PHONE_KEY_RE = re.compile(r"^\+\d{3,}$")
+
+# The thread surface's React button carries no emoji (one button per message,
+# not one per emoji), so a bare press reacts with a neutral acknowledgement.
+_DEFAULT_REACTION_EMOJI = "\U0001f44d"
+
+
+def _coerce_action_int(value: Any) -> int | None:
+    """Coerce an action-context value to an int, or ``None`` when not one.
+
+    The context arrives as host-supplied JSON, so a timestamp may be a JSON
+    number, a numeric string, or a float; only a value that survives as a
+    lossless integer passes. ``bool`` is rejected: it is an int in Python but
+    never a timestamp.
+    """
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value) if value.is_integer() else None
+    if isinstance(value, str):
+        try:
+            return int(value.strip())
+        except ValueError:
+            return None
+    return None
+
+
+async def _dispatch_action_target(conversation_id: str) -> tuple[str, bool]:
+    """Resolve an action's conversation id to ``(target, is_group)``.
+
+    The conversation id is a conversation key: a group id (or, for display-
+    named threads, a name) for group threads, otherwise the counterparty's
+    number as signal-cli reports it — E.164, with ``+`` (see
+    :func:`signal_mcp.history.conversation_key`). A number is checked with
+    :func:`_ensure_trusted` exactly as the ``*_to_user`` tools do; anything
+    else is put through :func:`_ensure_trusted_group`, which enforces the
+    same allowlist against the group's id *and* display name and returns the
+    resolved group id. An untrusted recipient raises
+    :class:`UntrustedRecipientError` either way — there is no dispatch path
+    around the allowlist — and the shape rule keeps a group id from being
+    mistaken for a user recipient when the allowlist is disabled.
+    """
+    if _PHONE_KEY_RE.match(conversation_id):
+        _ensure_trusted(conversation_id)
+        return conversation_id, False
+    gid = await _ensure_trusted_group(conversation_id)
+    return gid, True
+
+
+@mcp.tool()
+@_log_tool_errors
+async def a2ui_action(
+    name: str, context: dict[str, Any] | None = None
+) -> dict[str, str]:
+    """Handle an interaction with an A2UI surface this server rendered.
+
+    A2UI-capable hosts deliver Button presses on the chat surfaces as a call to
+    this tool: ``name`` is the button's action name and ``context`` the
+    button's context object with data bindings already resolved by the host.
+    The thread surface's buttons are "reply" (context: ``conversation_id``)
+    and "react" (context: ``conversation_id``, ``target_author``,
+    ``target_timestamp``); a "react" context may also carry ``emoji`` and
+    ``remove``. A React button carries no emoji — the thread surface renders
+    one per message, not one per emoji — so a press without ``emoji`` reacts
+    with the neutral thumbs-up.
+
+    Treat ``context`` as untrusted host-supplied data: it names a target, it
+    does not grant permission to message it. Every dispatch runs the same
+    trusted-recipients checks as the direct tools (``_ensure_trusted`` /
+    ``_ensure_trusted_group``) before any daemon call, and dispatches
+    exclusively through ``_send_message`` / ``_send_reaction`` — an action
+    targeting a recipient not on a configured allowlist fails with the same
+    ``UntrustedRecipientError`` as the equivalent direct tool call.
+    """
+    logger.info(f"Tool called: a2ui_action {name!r}")
+    ctx: dict[str, Any] = context or {}
+    conversation_id = _normalize_recipient(str(ctx.get("conversation_id") or ""))
+    if not conversation_id:
+        raise SignalError(f"a2ui_action {name!r}: context is missing conversation_id")
+
+    if name == "reply":
+        message = ctx.get("message")
+        if message is not None and not isinstance(message, str):
+            raise SignalError("a2ui_action reply: message must be a string")
+        target, is_group = await _dispatch_action_target(conversation_id)
+        await _send_message(message or "", target, is_group=is_group)
+        return {"message": "Message sent successfully"}
+
+    if name == "react":
+        emoji = ctx.get("emoji", _DEFAULT_REACTION_EMOJI)
+        if emoji is None:
+            emoji = _DEFAULT_REACTION_EMOJI
+        if not isinstance(emoji, str) or not emoji:
+            raise SignalError("a2ui_action react: emoji must be a non-empty string")
+        target_author = ctx.get("target_author")
+        if not isinstance(target_author, str) or not target_author:
+            raise SignalError("a2ui_action react: context is missing target_author")
+        target_timestamp = _coerce_action_int(ctx.get("target_timestamp"))
+        if target_timestamp is None:
+            raise SignalError(
+                "a2ui_action react: context has no integer target_timestamp"
+            )
+        remove = ctx.get("remove", False)
+        if not isinstance(remove, bool):
+            raise SignalError("a2ui_action react: remove must be a boolean")
+        target, is_group = await _dispatch_action_target(conversation_id)
+        await _send_reaction(
+            emoji,
+            target,
+            target_author,
+            target_timestamp,
+            is_group=is_group,
+            remove=remove,
+        )
+        return {"message": "Reaction sent successfully"}
+
+    raise SignalError(f"Unknown a2ui action: {name!r}")
+
+
 @mcp.tool()
 @_log_tool_errors
 async def receive_message(timeout: float = 60.0) -> MessageResponse:

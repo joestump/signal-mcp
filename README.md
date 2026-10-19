@@ -770,6 +770,18 @@ React to a user's message with an emoji.
 React to a message in a group. Same parameters as `send_reaction_to_user`,
 except `group_id` (id or display name) identifies the group.
 
+### `a2ui_action(name, context=None)`
+
+Handle an interaction with an A2UI surface this server rendered. A2UI-capable
+hosts deliver Button presses on the chat surfaces as a call to this tool:
+`name` is the button's action name (`reply` or `react`) and `context` the
+button's context object with host-resolved bindings (`conversation_id`, plus
+`target_author` / `target_timestamp` and optional `emoji` / `remove` for
+`react`, and `message` for `reply`). Dispatch goes exclusively through the
+same send paths and enforces the same trusted-recipients allowlist as the
+tools above — an action targeting an untrusted recipient fails exactly like
+the equivalent direct tool call.
+
 ### `receive_message(timeout=60)`
 
 Wait up to `timeout` seconds for the next actionable message (text body,
