@@ -185,4 +185,4 @@ Greenfield and additive — no schema, no persisted state, no changed tool shape
 
 - ~~Does `mcp` 1.29 FastMCP expose resource annotations, or is low-level registration required?~~ **Resolved (spike #65):** yes — `@mcp.resource(...)` accepts `annotations=Annotations(audience=["user"])` directly in `mcp==1.29.0`. No low-level registration needed.
 - Should attachment images eventually render as A2UI `Image` components using S3 presigned URLs, given their short TTL and host fetch policy? (Deferred; textual lines in v1.)
-- Exact `a2ui_action` tool contract for phase 2 — adopt the `a2ui_action`/`a2ui_error` naming and shape the host's round-trip (joestump-agent/crush#221) expects.
+- ~~Exact `a2ui_action` tool contract for phase 2~~ **Resolved (joestump/signal-mcp#86):** the server registers `a2ui_action(name, context)` per the host's round-trip shape (joestump-agent/crush#221), dispatching `reply` and `react` through the existing `_send_message` / `_send_reaction` paths with the same allowlist enforcement as the direct tools. `a2ui_error` is not registered (deferred: render failures keep the host-side fallback).

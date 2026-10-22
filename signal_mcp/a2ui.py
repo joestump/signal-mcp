@@ -121,14 +121,15 @@ def button(
 ) -> dict[str, Any]:
     """A Button component. ``action_name`` and ``context`` wire ``a2ui_action``.
 
-    In v1 buttons are inert placeholders — they carry the action name and
-    context so an ``a2ui_action``-capable host can wire them once the action
-    tool ships, but no send path exists yet.
+    Buttons carry the action name and context so an ``a2ui_action``-capable
+    host can route a press back to the server; hosts without the round trip
+    render them as before.
 
-    Phase-2 constraint: when the ``a2ui_action`` tool ships, it MUST dispatch
-    exclusively to the existing ``_send_message`` / ``_send_reaction`` paths
-    and MUST enforce ``_ensure_trusted`` / ``_ensure_trusted_group`` — there
-    must be no send path that bypasses the allowlist.
+    Constraint (SPEC-0001 REQ "Interactive Actions"): the ``a2ui_action``
+    tool dispatches exclusively to the existing ``_send_message`` /
+    ``_send_reaction`` paths and enforces ``_ensure_trusted`` /
+    ``_ensure_trusted_group`` — there is no send path that bypasses the
+    allowlist.
     """
     btn: dict[str, Any] = {"component": "Button", "id": id, "label": label}
     if action_name is not None:
@@ -396,7 +397,7 @@ def render_thread(
             components.append(caption(react_id, " \u00b7 ".join(parts)))
             children.append(react_id)
 
-        # Action buttons (inert in v1 — the a2ui_action tool is phase 2).
+        # Action buttons, wired for the a2ui_action round trip.
         # A reaction needs a target message, which Signal addresses by
         # (author, sent timestamp). A buffered message can legitimately lack
         # either — record_outbound stores timestamp=None whenever the daemon's
